@@ -77,16 +77,22 @@ export class Agent {
         return reply;
       }
 
-      // 情况B: LLM 请求调用工具 → 执行
+      // 情况B: LLM 请求调用工具 → 并行执行
       this.messages.push(this.formatToolCallsMessage(response));
 
-      for (const tc of response.toolCalls) {
-        this.logger.logToolExecution(tc.name, tc.arguments);
-        const resultStr = await this.executeTool(tc.name, tc.arguments);
+      const results = await Promise.all(
+        response.toolCalls.map(async (tc) => {
+          this.logger.logToolExecution(tc.name, tc.arguments);
+          const content = await this.executeTool(tc.name, tc.arguments);
+          return { id: tc.id, content };
+        }),
+      );
+
+      for (const r of results) {
         this.messages.push({
           role: "tool",
-          tool_call_id: tc.id,
-          content: resultStr,
+          tool_call_id: r.id,
+          content: r.content,
         });
       }
     }
