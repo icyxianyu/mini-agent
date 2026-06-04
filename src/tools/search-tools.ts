@@ -10,6 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ToolBase, ToolResult } from "./base.js";
+import { resolveWorkspacePath } from "./fs-utils.js";
 
 /** 默认跳过的目录 */
 const SKIP_DIRS = new Set([
@@ -70,6 +71,9 @@ export class SearchContentTool extends ToolBase {
 
   execute(args: Record<string, unknown>): ToolResult {
     const directory = args.directory as string;
+    let absDir: string;
+    try { absDir = resolveWorkspacePath(directory); } catch (e: any) { return ToolResult.fail(e.message); }
+
     const pattern = args.pattern as string;
     const fileTypes = args.file_types
       ? (args.file_types as string).split(",").map((s) => s.trim())
@@ -77,7 +81,6 @@ export class SearchContentTool extends ToolBase {
     const caseSensitive = (args.case_sensitive as boolean) ?? false;
     const maxResults = (args.max_results as number) ?? 50;
 
-    const absDir = path.resolve(directory);
     if (!fs.existsSync(absDir)) {
       return ToolResult.fail(`目录不存在: ${directory}`);
     }

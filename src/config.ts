@@ -23,6 +23,9 @@ export const Config = {
     process.env.SYSTEM_PROMPT ??
     "你是一个编程助手，可以读写文件、帮助用户完成编程任务。",
 
+  /** 工作区根目录，所有文件操作限制在此目录内 */
+  workspaceRoot: process.env.WORKSPACE_ROOT || process.cwd(),
+
   /** 是否启用上下文注入（启动时自动收集项目信息注入 system prompt） */
   enableContextInjection:
     (process.env.ENABLE_CONTEXT_INJECTION ?? "true") === "true",

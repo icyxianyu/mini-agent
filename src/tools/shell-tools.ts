@@ -16,6 +16,7 @@
  */
 import { exec } from "node:child_process";
 import { ToolBase, ToolResult } from "./base.js";
+import { Config } from "../config.js";
 
 export class ShellCommandTool extends ToolBase {
   name = "execute_command";
@@ -45,7 +46,7 @@ export class ShellCommandTool extends ToolBase {
 
   execute(args: Record<string, unknown>): Promise<ToolResult> {
     const command = args.command as string;
-    const workingDir = (args.working_dir as string) || process.cwd();
+    const workingDir = (args.working_dir as string) || Config.workspaceRoot;
     const timeoutSec = ((args.timeout as number) || 30) * 1000;
 
     return new Promise((resolve) => {

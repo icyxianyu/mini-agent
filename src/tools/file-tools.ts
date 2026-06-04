@@ -24,6 +24,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ToolBase, ToolResult } from "./base.js";
+import { resolveWorkspacePath } from "./fs-utils.js";
 
 // ═══════════════════════════════════════════════════
 //  各工具实现
@@ -45,15 +46,18 @@ export class ReadFileTool extends ToolBase {
 
   execute(args: Record<string, unknown>): ToolResult {
     const filePath = args.file_path as string;
+    let resolved: string;
+    try { resolved = resolveWorkspacePath(filePath); } catch (e: any) { return ToolResult.fail(e.message); }
+
     const offset = args.offset as number | undefined;
     const limit = args.limit as number | undefined;
 
-    if (!fs.existsSync(filePath)) return ToolResult.fail(`文件不存在: ${filePath}`);
-    const stat = fs.statSync(filePath);
+    if (!fs.existsSync(resolved)) return ToolResult.fail(`文件不存在: ${filePath}`);
+    const stat = fs.statSync(resolved);
     if (stat.isDirectory()) return ToolResult.fail(`路径是目录而非文件: ${filePath}`);
 
     try {
-      const raw = fs.readFileSync(filePath, "utf-8");
+      const raw = fs.readFileSync(resolved, "utf-8");
       let lines = raw.split("\n");
 
       if (limit !== undefined) {
@@ -89,10 +93,12 @@ export class WriteFileTool extends ToolBase {
   execute(args: Record<string, unknown>): ToolResult {
     const filePath = args.file_path as string;
     const content = args.content as string;
+    let resolved: string;
+    try { resolved = resolveWorkspacePath(filePath); } catch (e: any) { return ToolResult.fail(e.message); }
 
     try {
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      fs.writeFileSync(filePath, content, "utf-8");
+      fs.mkdirSync(path.dirname(resolved), { recursive: true });
+      fs.writeFileSync(resolved, content, "utf-8");
       return ToolResult.ok(`文件已写入: ${filePath} (${content.length} 字符)`);
     } catch (e: any) {
       return ToolResult.fail(`写入失败: ${e.message}`);
@@ -116,19 +122,22 @@ export class EditFileTool extends ToolBase {
 
   execute(args: Record<string, unknown>): ToolResult {
     const filePath = args.file_path as string;
+    let resolved: string;
+    try { resolved = resolveWorkspacePath(filePath); } catch (e: any) { return ToolResult.fail(e.message); }
+
     const oldStr = args.old_str as string;
     const newStr = args.new_str as string;
 
-    if (!fs.existsSync(filePath)) return ToolResult.fail(`文件不存在: ${filePath}`);
+    if (!fs.existsSync(resolved)) return ToolResult.fail(`文件不存在: ${filePath}`);
 
     try {
-      const content = fs.readFileSync(filePath, "utf-8");
+      const content = fs.readFileSync(resolved, "utf-8");
       const count = content.split(oldStr).length - 1;
       if (count === 0) return ToolResult.fail("未找到匹配的文本");
       if (count > 1) return ToolResult.fail(`找到 ${count} 处匹配，请提供更精确的 old_str`);
 
       const newContent = content.replace(oldStr, newStr);
-      fs.writeFileSync(filePath, newContent, "utf-8");
+      fs.writeFileSync(resolved, newContent, "utf-8");
       return ToolResult.ok(`文件已编辑: ${filePath}`);
     } catch (e: any) {
       return ToolResult.fail(`编辑失败: ${e.message}`);
@@ -147,9 +156,12 @@ export class DeleteFileTool extends ToolBase {
 
   execute(args: Record<string, unknown>): ToolResult {
     const filePath = args.file_path as string;
-    if (!fs.existsSync(filePath)) return ToolResult.fail(`文件不存在: ${filePath}`);
+    let resolved: string;
+    try { resolved = resolveWorkspacePath(filePath); } catch (e: any) { return ToolResult.fail(e.message); }
+
+    if (!fs.existsSync(resolved)) return ToolResult.fail(`文件不存在: ${filePath}`);
     try {
-      fs.unlinkSync(filePath);
+      fs.unlinkSync(resolved);
       return ToolResult.ok(`文件已删除: ${filePath}`);
     } catch (e: any) {
       return ToolResult.fail(`删除失败: ${e.message}`);
@@ -170,13 +182,17 @@ export class CopyFileTool extends ToolBase {
   };
 
   execute(args: Record<string, unknown>): ToolResult {
-    const src = args.source as string;
-    const dst = args.destination as string;
-    if (!fs.existsSync(src)) return ToolResult.fail(`源文件不存在: ${src}`);
+    const srcStr = args.source as string;
+    const dstStr = args.destination as string;
+    let src: string, dst: string;
+    try { src = resolveWorkspacePath(srcStr); dst = resolveWorkspacePath(dstStr); }
+    catch (e: any) { return ToolResult.fail(e.message); }
+
+    if (!fs.existsSync(src)) return ToolResult.fail(`源文件不存在: ${srcStr}`);
     try {
       fs.mkdirSync(path.dirname(dst), { recursive: true });
       fs.copyFileSync(src, dst);
-      return ToolResult.ok(`文件已复制: ${src} → ${dst}`);
+      return ToolResult.ok(`文件已复制: ${srcStr} → ${dstStr}`);
     } catch (e: any) {
       return ToolResult.fail(`复制失败: ${e.message}`);
     }
@@ -196,13 +212,17 @@ export class MoveFileTool extends ToolBase {
   };
 
   execute(args: Record<string, unknown>): ToolResult {
-    const src = args.source as string;
-    const dst = args.destination as string;
-    if (!fs.existsSync(src)) return ToolResult.fail(`源文件不存在: ${src}`);
+    const srcStr = args.source as string;
+    const dstStr = args.destination as string;
+    let src: string, dst: string;
+    try { src = resolveWorkspacePath(srcStr); dst = resolveWorkspacePath(dstStr); }
+    catch (e: any) { return ToolResult.fail(e.message); }
+
+    if (!fs.existsSync(src)) return ToolResult.fail(`源文件不存在: ${srcStr}`);
     try {
       fs.mkdirSync(path.dirname(dst), { recursive: true });
       fs.renameSync(src, dst);
-      return ToolResult.ok(`文件已移动: ${src} → ${dst}`);
+      return ToolResult.ok(`文件已移动: ${srcStr} → ${dstStr}`);
     } catch (e: any) {
       return ToolResult.fail(`移动失败: ${e.message}`);
     }
@@ -220,8 +240,11 @@ export class CreateDirectoryTool extends ToolBase {
 
   execute(args: Record<string, unknown>): ToolResult {
     const dirPath = args.path as string;
+    let resolved: string;
+    try { resolved = resolveWorkspacePath(dirPath); } catch (e: any) { return ToolResult.fail(e.message); }
+
     try {
-      fs.mkdirSync(dirPath, { recursive: true });
+      fs.mkdirSync(resolved, { recursive: true });
       return ToolResult.ok(`目录已创建: ${dirPath}`);
     } catch (e: any) {
       return ToolResult.fail(`创建失败: ${e.message}`);
@@ -240,10 +263,13 @@ export class ListDirectoryTool extends ToolBase {
 
   execute(args: Record<string, unknown>): ToolResult {
     const dirPath = args.path as string;
-    if (!fs.existsSync(dirPath)) return ToolResult.fail(`目录不存在: ${dirPath}`);
+    let resolved: string;
+    try { resolved = resolveWorkspacePath(dirPath); } catch (e: any) { return ToolResult.fail(e.message); }
+
+    if (!fs.existsSync(resolved)) return ToolResult.fail(`目录不存在: ${dirPath}`);
     try {
       const entries = fs
-        .readdirSync(dirPath, { withFileTypes: true })
+        .readdirSync(resolved, { withFileTypes: true })
         .sort((a, b) => {
           if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
           return a.name.localeCompare(b.name);
