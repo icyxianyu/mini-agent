@@ -83,7 +83,6 @@ export class SearchContentTool extends ToolBase {
     }
 
     const results: string[] = [];
-    let totalMatches = 0;
 
     try {
       const regex = this.compilePattern(pattern, caseSensitive);

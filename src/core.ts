@@ -33,6 +33,7 @@ import { Config } from "./config.js";
 import { chat, chatStream, type LLMResponse } from "./llm.js";
 import { getTool, getAllToolSchemas } from "./tools/index.js";
 import type { Logger } from "./logger.js";
+import type { ProjectContext } from "./context.js";
 
 type Message = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
@@ -49,9 +50,13 @@ export class Agent {
   /** 流式文本回调（每收到一个 token 调用一次） */
   private readonly onToken?: (text: string) => void;
 
-  constructor(logger: Logger, onToken?: (text: string) => void) {
+  /** 项目上下文（上下文注入用） */
+  private readonly context: ProjectContext | null = null;
+
+  constructor(logger: Logger, onToken?: (text: string) => void, context?: ProjectContext) {
     this.logger = logger;
     this.onToken = onToken;
+    this.context = context ?? null;
     this.reset();
   }
 
@@ -158,9 +163,19 @@ export class Agent {
 
   /** 重置对话历史 */
   reset(): void {
+    // 构建 system prompt：基础提示词 + 上下文注入
+    let systemContent = Config.systemPrompt;
+
+    if (Config.enableContextInjection && this.context) {
+      systemContent += `\n\n## 当前项目上下文\n${this.context.summary}\n\n当用户提出与当前项目相关的需求时，利用以上上下文信息来辅助决策。`;
+    }
+
     this.messages = [
-      { role: "system", content: Config.systemPrompt },
+      { role: "system", content: systemContent },
     ];
     this.logger.logSystem("对话已重置");
+    if (this.context) {
+      this.logger.logSystem(`上下文已注入 (${this.context.summary.length} 字符)`);
+    }
   }
 }

@@ -23,6 +23,16 @@ export const Config = {
     process.env.SYSTEM_PROMPT ??
     "你是一个编程助手，可以读写文件、帮助用户完成编程任务。",
 
+  /** 是否启用上下文注入（启动时自动收集项目信息注入 system prompt） */
+  enableContextInjection:
+    (process.env.ENABLE_CONTEXT_INJECTION ?? "true") === "true",
+
+  /** 目录树最大深度（上下文注入用） */
+  contextDirDepth: Number(process.env.CONTEXT_DIR_DEPTH) || 3,
+
+  /** 目录树根层级最大条目数 */
+  contextMaxTopEntries: Number(process.env.CONTEXT_MAX_TOP_ENTRIES) || 30,
+
   /** 最大工具调用轮数（防止 LLM 陷入死循环） */
   maxToolRounds: Number(process.env.MAX_TOOL_ROUNDS) || 10,
 
