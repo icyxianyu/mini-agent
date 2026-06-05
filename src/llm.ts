@@ -84,11 +84,23 @@ export async function chat(options: ChatOptions): Promise<LLMResponse> {
   const msg = choice.message;
 
   if (msg.tool_calls && msg.tool_calls.length > 0) {
-    const toolCalls: ToolCall[] = msg.tool_calls.map((tc) => ({
-      id: tc.id,
-      name: tc.function.name,
-      arguments: JSON.parse(tc.function.arguments),
-    }));
+    const toolCalls: ToolCall[] = [];
+    for (const tc of msg.tool_calls) {
+      try {
+        toolCalls.push({
+          id: tc.id,
+          name: tc.function.name,
+          arguments: JSON.parse(tc.function.arguments),
+        });
+      } catch {
+        // LLM 返回了不完整/格式错误的 JSON → 作为错误提不
+        if (logger) logger.logLLMResponse(choice.finish_reason, null, toolCalls);
+        return {
+          content: `❌ 工具调用参数格式错误，请用有效的 JSON 重试。\n工具: ${tc.function.name}\n收到: ${tc.function.arguments.slice(0, 200)}`,
+          toolCalls: [],
+        };
+      }
+    }
     if (logger) logger.logLLMResponse(choice.finish_reason, null, toolCalls);
     return { content: null, toolCalls };
   }
@@ -172,14 +184,23 @@ export async function chatStream(options: ChatStreamOptions): Promise<LLMRespons
 
   // 拼接完毕 → 判断是文本还是工具调用
   if (tcAccum.size > 0) {
-    const toolCalls: ToolCall[] = Array.from(tcAccum.values())
-      .sort((a, b) => (a.id < b.id ? -1 : 1))
-      .map((tc) => ({
-        id: tc.id,
-        name: tc.name,
-        arguments: JSON.parse(tc.args), // ← 完整 JSON，可以 parse 了
-      }));
-
+    const toolCalls: ToolCall[] = [];
+    for (const tc of tcAccum.values()) {
+      try {
+        toolCalls.push({
+          id: tc.id,
+          name: tc.name,
+          arguments: JSON.parse(tc.args),
+        });
+      } catch {
+        // LLM 流式返回的 tool_calls 碎片拼出来不是有效 JSON
+        if (logger) logger.logLLMResponse(finishReason, null, toolCalls);
+        return {
+          content: `❌ 工具调用参数格式错误，请用有效的 JSON 重试。\n工具: ${tc.name}\n拼装后: ${tc.args.slice(0, 200)}`,
+          toolCalls: [],
+        };
+      }
+    }
     if (logger) logger.logLLMResponse(finishReason, null, toolCalls);
     return { content: null, toolCalls };
   }

@@ -3,3 +3,4 @@ dist/
 logs/
 test/
 .env
+.mini-agent/

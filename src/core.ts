@@ -35,7 +35,7 @@ import { getTool, getAllToolSchemas } from "./tools/index.js";
 import type { Logger } from "./logger.js";
 import type { ProjectContext } from "./context.js";
 
-type Message = OpenAI.Chat.Completions.ChatCompletionMessageParam;
+export type Message = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
 export class Agent {
   /** 对话历史 */
@@ -87,6 +87,17 @@ export class Agent {
       // 情况A: 纯文本回复 → 结束
       if (response.toolCalls.length === 0) {
         const reply = response.content ?? "";
+
+        // 如果是工具调用参数格式错误 → 不结束，注入错误提示让 LLM 重试
+        if (reply.startsWith("❌ 工具调用参数格式错误")) {
+          this.logger.logError("LLM 返回了格式错误的 tool_call 参数，正在重试");
+          this.messages.push({
+            role: "user",
+            content: `${reply}\n\n请修正参数格式后重新调用工具。`,
+          });
+          continue; // ← 回到循环顶部，重试
+        }
+
         this.messages.push({ role: "assistant", content: reply });
         return reply;
       }
@@ -133,7 +144,7 @@ export class Agent {
   ): Promise<string> {
     const tool = getTool(name);
     if (!tool) {
-      const err = `错误: 未知工具 '${name}'`;
+      const err = `❌ 未知工具: ${name}`;
       this.logger.logToolResult(false, err);
       return err;
     }
@@ -142,7 +153,7 @@ export class Agent {
     if (Config.enableToolConfirmation && this.askConfirm && tool.riskLevel !== "read") {
       const approved = await this.askConfirm(name, args, tool.riskLevel);
       if (!approved) {
-        const err = `用户拒绝了工具调用: ${name}`;
+        const err = `🚫 用户拒绝了工具调用: ${name} —— 请换一种方式或跳过此步骤`;
         this.logger.logToolResult(false, err);
         return err;
       }
@@ -152,16 +163,35 @@ export class Agent {
 
     try {
       const result = await tool.execute(args);
-      const resultStr = result.success
-        ? result.content
-        : `工具执行失败: ${result.error}`;
-      this.logger.logToolResult(result.success, resultStr);
-      return resultStr;
+      if (result.success) {
+        this.logger.logToolResult(true, result.content);
+        return result.content;
+      }
+
+      // 失败 → 结构化错误，引导 LLM 恢复
+      const err = this.formatError(name, args, result.error ?? "未知错误");
+      this.logger.logToolResult(false, err);
+      return err;
     } catch (e: any) {
-      const err = `工具执行异常: ${e.message}`;
+      const err = this.formatError(name, args, e.message);
       this.logger.logToolResult(false, err);
       return err;
     }
+  }
+
+  /** 格式化工具错误，帮助 LLM 理解并自动恢复 */
+  private formatError(name: string, args: Record<string, unknown>, msg: string): string {
+    const argsPreview = JSON.stringify(args).slice(0, 150);
+    // 分类错误，给出针对性提示
+    let hint = "";
+    if (msg.includes("不存在") || msg.includes("not found") || msg.includes("ENOENT")) {
+      hint = `\n💡 提示: 文件/目录不存在，请检查路径是否正确。可用 list_directory 确认目录内容，或用 search_content 搜索文件名。`;
+    } else if (msg.includes("权限") || msg.includes("permission") || msg.includes("EACCES")) {
+      hint = `\n💡 提示: 权限不足，请尝试其他路径或检查文件权限。`;
+    } else if (msg.includes("timed out") || msg.includes("timeout") || msg.includes("killed")) {
+      hint = `\n💡 提示: 命令超时，请尝试拆分命令、减少范围或增加 timeout 参数。`;
+    }
+    return `❌ ${name}(${argsPreview}) 失败: ${msg}${hint}`;
   }
 
   /** 将 LLMResponse.toolCalls 转成 OpenAI 格式的 assistant 消息 */
@@ -182,19 +212,32 @@ export class Agent {
 
   /** 重置对话历史 */
   reset(): void {
-    // 构建 system prompt：基础提示词 + 上下文注入
-    let systemContent = Config.systemPrompt;
-
-    if (Config.enableContextInjection && this.context) {
-      systemContent += `\n\n## 当前项目上下文\n${this.context.summary}\n\n当用户提出与当前项目相关的需求时，利用以上上下文信息来辅助决策。`;
-    }
-
-    this.messages = [
-      { role: "system", content: systemContent },
-    ];
+    this.messages = [this.buildSystemMessage()];
     this.logger.logSystem("对话已重置");
     if (this.context) {
       this.logger.logSystem(`上下文已注入 (${this.context.summary.length} 字符)`);
     }
+  }
+
+  /** 构建 system message */
+  private buildSystemMessage(): Message {
+    let content = Config.systemPrompt;
+    if (Config.enableContextInjection && this.context) {
+      content += `\n\n## 当前项目上下文\n${this.context.summary}\n\n当用户提出与当前项目相关的需求时，利用以上上下文信息来辅助决策。`;
+    }
+    return { role: "system", content };
+  }
+
+  /** 获取所有消息（供 SessionManager 持久化用） */
+  getMessages(): Message[] {
+    return this.messages;
+  }
+
+  /** 设置消息（从 SessionManager 恢复时用） */
+  setMessages(msgs: Message[]): void {
+    if (Array.isArray(msgs) && msgs.length > 0) {
+      msgs[0] = this.buildSystemMessage(); // 替换为最新上下文
+    }
+    this.messages = msgs;
   }
 }
