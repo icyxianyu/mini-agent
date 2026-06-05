@@ -53,10 +53,19 @@ export class Agent {
   /** 项目上下文（上下文注入用） */
   private readonly context: ProjectContext | null = null;
 
-  constructor(logger: Logger, onToken?: (text: string) => void, context?: ProjectContext) {
+  /** 工具确认回调（返回 true=允许, false=拒绝） */
+  private readonly askConfirm?: (name: string, args: Record<string, unknown>, risk: string) => Promise<boolean>;
+
+  constructor(
+    logger: Logger,
+    onToken?: (text: string) => void,
+    context?: ProjectContext,
+    askConfirm?: (name: string, args: Record<string, unknown>, risk: string) => Promise<boolean>,
+  ) {
     this.logger = logger;
     this.onToken = onToken;
     this.context = context ?? null;
+    this.askConfirm = askConfirm;
     this.reset();
   }
 
@@ -127,6 +136,16 @@ export class Agent {
       const err = `错误: 未知工具 '${name}'`;
       this.logger.logToolResult(false, err);
       return err;
+    }
+
+    // 工具确认：写/删/执行类操作需用户确认
+    if (Config.enableToolConfirmation && this.askConfirm && tool.riskLevel !== "read") {
+      const approved = await this.askConfirm(name, args, tool.riskLevel);
+      if (!approved) {
+        const err = `用户拒绝了工具调用: ${name}`;
+        this.logger.logToolResult(false, err);
+        return err;
+      }
     }
 
     console.log(`\n  🔧 调用工具: ${name}(${JSON.stringify(args)})`);

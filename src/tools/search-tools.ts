@@ -36,6 +36,7 @@ const SKIP_EXTS = new Set([
 
 export class SearchContentTool extends ToolBase {
   name = "search_content";
+  riskLevel = "read" as const;
   description =
     "在指定目录下递归搜索文件内容。" +
     "支持文本匹配和正则表达式。" +

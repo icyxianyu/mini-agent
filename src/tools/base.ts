@@ -34,11 +34,17 @@ export const ToolResult = {
   },
 };
 
+/** 工具风险等级 */
+export type RiskLevel = "read" | "write" | "execute" | "delete";
+
 /** 工具接口 — 所有工具必须实现 */
 export interface BaseTool {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
+
+  /** 风险等级：read=无需确认, write=需确认, execute=需确认, delete=强制确认 */
+  riskLevel: RiskLevel;
 
   /** 转成 OpenAI Function Calling 格式 */
   toOpenAISchema(): OpenAI.Chat.Completions.ChatCompletionTool;
@@ -55,6 +61,7 @@ export abstract class ToolBase implements BaseTool {
   abstract name: string;
   abstract description: string;
   abstract parameters: Record<string, unknown>;
+  abstract riskLevel: RiskLevel;
 
   toOpenAISchema(): OpenAI.Chat.Completions.ChatCompletionTool {
     return {

@@ -111,9 +111,42 @@ async function main() {
     console.log(chalk.dim("📋 上下文注入已禁用 (ENABLE_CONTEXT_INJECTION=false)\n"));
   }
 
+  // 工具确认回调（写/删/执行等危险操作需用户确认）
+  const autoApprove = new Map<string, boolean>(); // name → 是否永久通过
+  const askConfirm = async (name: string, args: Record<string, unknown>, risk: string) => {
+    if (autoApprove.has(name)) return true;
+
+    const riskIcon = risk === "delete" ? "⚠️ " : risk === "execute" ? "⚡ " : "✏️ ";
+    const riskLabel = risk === "delete" ? chalk.red(`${riskIcon}危险`) : risk === "execute" ? chalk.yellow(`${riskIcon}执行`) : chalk.cyan(`${riskIcon}写入`);
+    const argsStr = JSON.stringify(args);
+    const shortArgs = argsStr.length > 100 ? argsStr.slice(0, 100) + "..." : argsStr;
+
+    const prompt = [
+      `\n  ${riskLabel} 允许执行 ${chalk.bold(name)}?`,
+      `  ${chalk.dim(shortArgs)}`,
+      `  ${chalk.dim("[Y] 允许  [n] 拒绝  [a] 本次会话始终允许  [s] 跳过此类工具")}`,
+    ].join("\n") + " ";
+
+    const answer = await new Promise<string>((resolve) => {
+      rl.question(prompt, resolve);
+    });
+    const choice = answer.trim().toLowerCase();
+
+    if (choice === "n") return false;           // 拒绝
+    if (choice === "a") { autoApprove.set(name, true); console.log(chalk.dim(`  → 已为 ${name} 启用始终允许\n`)); return true; }
+    if (choice === "s") {                       // 跳过所有确认
+      for (const t of ["write_file", "edit_file", "copy_file", "move_file", "create_directory", "execute_command", "delete_file"]) {
+        autoApprove.set(t, true);
+      }
+      console.log(chalk.dim("  → 已跳过所有工具确认\n"));
+      return true;
+    }
+    return true; // 回车/其他 = 允许
+  };
+
   const agent = new Agent(logger, (token: string) => {
     process.stdout.write(token);
-  }, context ?? undefined);
+  }, context ?? undefined, askConfirm);
   console.log(BANNER(logger.getFilePath(), contextSummary));
 
   while (true) {

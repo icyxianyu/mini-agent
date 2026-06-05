@@ -20,6 +20,7 @@ import { Config } from "../config.js";
 
 export class ShellCommandTool extends ToolBase {
   name = "execute_command";
+  riskLevel = "execute" as const;
   description =
     "在终端中执行一条命令并返回输出。" +
     "适用于: 运行构建脚本、安装依赖、执行测试、查看 git 状态等。" +

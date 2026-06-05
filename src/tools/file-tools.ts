@@ -32,6 +32,7 @@ import { resolveWorkspacePath } from "./fs-utils.js";
 
 export class ReadFileTool extends ToolBase {
   name = "read_file";
+  riskLevel = "read" as const;
   description =
     "读取指定文件的内容。可以指定行范围（offset 和 limit）来分段读取大文件。";
   parameters = {
@@ -79,6 +80,7 @@ export class ReadFileTool extends ToolBase {
 
 export class WriteFileTool extends ToolBase {
   name = "write_file";
+  riskLevel = "write" as const;
   description =
     "将内容写入文件。如果文件不存在则创建，如果已存在则覆盖。会自动创建父目录。";
   parameters = {
@@ -108,6 +110,7 @@ export class WriteFileTool extends ToolBase {
 
 export class EditFileTool extends ToolBase {
   name = "edit_file";
+  riskLevel = "write" as const;
   description =
     "在文件中精确查找 old_str 并替换为 new_str。old_str 必须唯一匹配，否则操作失败。";
   parameters = {
@@ -147,6 +150,7 @@ export class EditFileTool extends ToolBase {
 
 export class DeleteFileTool extends ToolBase {
   name = "delete_file";
+  riskLevel = "delete" as const;
   description = "删除指定文件。操作不可逆，请谨慎使用。";
   parameters = {
     type: "object",
@@ -171,6 +175,7 @@ export class DeleteFileTool extends ToolBase {
 
 export class CopyFileTool extends ToolBase {
   name = "copy_file";
+  riskLevel = "write" as const;
   description = "复制文件到目标路径。会自动创建目标目录。";
   parameters = {
     type: "object",
@@ -201,6 +206,7 @@ export class CopyFileTool extends ToolBase {
 
 export class MoveFileTool extends ToolBase {
   name = "move_file";
+  riskLevel = "write" as const;
   description = "移动或重命名文件。会自动创建目标目录。";
   parameters = {
     type: "object",
@@ -231,6 +237,7 @@ export class MoveFileTool extends ToolBase {
 
 export class CreateDirectoryTool extends ToolBase {
   name = "create_directory";
+  riskLevel = "write" as const;
   description = "创建目录（包括所有父目录）。";
   parameters = {
     type: "object",
@@ -254,6 +261,7 @@ export class CreateDirectoryTool extends ToolBase {
 
 export class ListDirectoryTool extends ToolBase {
   name = "list_directory";
+  riskLevel = "read" as const;
   description = "列出指定目录下的文件和子目录。";
   parameters = {
     type: "object",

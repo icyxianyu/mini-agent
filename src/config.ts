@@ -26,6 +26,10 @@ export const Config = {
   /** 工作区根目录，所有文件操作限制在此目录内 */
   workspaceRoot: process.env.WORKSPACE_ROOT || process.cwd(),
 
+  /** 是否启用工具确认（写/删/执行命令前需用户确认） */
+  enableToolConfirmation:
+    (process.env.ENABLE_TOOL_CONFIRMATION ?? "true") === "true",
+
   /** 是否启用上下文注入（启动时自动收集项目信息注入 system prompt） */
   enableContextInjection:
     (process.env.ENABLE_CONTEXT_INJECTION ?? "true") === "true",
