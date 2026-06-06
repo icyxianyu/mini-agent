@@ -34,7 +34,7 @@ export class ReadFileTool extends ToolBase {
   name = "read_file";
   riskLevel = "read" as const;
   description =
-    "读取指定文件的内容。可以指定行范围（offset 和 limit）来分段读取大文件。";
+    "读取文件内容。使用 search_content 获得行号后，offset 跳到匹配行前 5 行，limit 覆盖匹配行 +10 行（不超过 50）。不要一次读完整个文件。";
   parameters = {
     type: "object",
     properties: {

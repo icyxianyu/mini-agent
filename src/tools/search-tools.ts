@@ -38,10 +38,10 @@ export class SearchContentTool extends ToolBase {
   name = "search_content";
   riskLevel = "read" as const;
   description =
-    "在指定目录下递归搜索文件内容。" +
-    "支持文本匹配和正则表达式。" +
-    "自动跳过 node_modules、.git、二进制文件。" +
-    "返回匹配行、文件路径和行号。";
+    "在指定目录下递归搜索文件内容。返回匹配行、文件路径和行号。" +
+    " 回答代码问题时优先使用本工具定位，再根据返回的行号用 read_file 的 offset/limit 精读。" +
+    " pattern 使用精准关键词或正则，不要太大泛。max_results 设为 20~40 足够。搜后只读命中的文件。" +
+    " 自动跳过 node_modules、.git、二进制文件。";
 
   parameters = {
     type: "object",

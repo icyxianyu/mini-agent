@@ -39,8 +39,13 @@
 ### 大文件分段
 *无依赖*
 
-- read_file 不指定 offset 时默认只读前 200 行
-- 末尾提示总行数 + 翻页用法
+**背景**：实测发现 LLM 即使搜到行号也不主动用 offset/limit，完整读文件浪费大量 token。
+**方案**：不改 LLM 行为，改工具默认行为——read_file 不指定 offset 时默认只返回前 200 行。
+
+- read_file 默认上限 200 行（可配置 `READ_FILE_DEFAULT_LIMIT`）
+- 超出部分展示总行数提示 + offset 翻页用法
+- 上下文注入已读过的文件部分不重复收 token
+- 对 LLM 透明：参数和接口不变，只是默认行为更保守
 
 ### Shell 安全分级
 *无依赖*

@@ -22,9 +22,9 @@ export class ShellCommandTool extends ToolBase {
   name = "execute_command";
   riskLevel = "execute" as const;
   description =
-    "在终端中执行一条命令并返回输出。" +
-    "适用于: 运行构建脚本、安装依赖、执行测试、查看 git 状态等。" +
-    "注意: 命令在子进程中执行，默认工作目录为当前项目目录，超时时间 30 秒。";
+    "在终端中执行一条命令并返回输出。适用于运行脚本、安装依赖、执行测试、查看 git 状态。" +
+    " 需要了解项目状态时直接执行（git status 等），不需要先读文件。安装依赖、构建等有副作用，需用户确认。" +
+    " 默认工作目录为项目根目录，超时 30 秒。";
 
   parameters = {
     type: "object",
