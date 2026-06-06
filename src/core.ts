@@ -47,6 +47,9 @@ export class Agent {
   /** 日志记录器 */
   private readonly logger: Logger;
 
+  /** 会话累计 token 用量 */
+  private totalUsage = { prompt: 0, completion: 0 };
+
   /** 流式文本回调（每收到一个 token 调用一次） */
   private readonly onToken?: (text: string) => void;
 
@@ -81,8 +84,14 @@ export class Agent {
         messages: this.messages,
         tools: this.toolSchemas,
         logger: this.logger,
-        onToken: this.onToken, // ← 流式回调：逐字输出到终端
+        onToken: this.onToken,
       });
+
+      // 累计 token
+      if (response.usage) {
+        this.totalUsage.prompt += response.usage.prompt;
+        this.totalUsage.completion += response.usage.completion;
+      }
 
       // 情况A: 纯文本回复 → 结束
       if (response.toolCalls.length === 0) {
@@ -132,6 +141,10 @@ export class Agent {
       messages: this.messages,
       logger: this.logger,
     });
+    if (final.usage) {
+      this.totalUsage.prompt += final.usage.prompt;
+      this.totalUsage.completion += final.usage.completion;
+    }
     const reply = final.content ?? "已达到最大操作轮数。";
     this.messages.push({ role: "assistant", content: reply });
     return reply;
@@ -213,10 +226,16 @@ export class Agent {
   /** 重置对话历史 */
   reset(): void {
     this.messages = [this.buildSystemMessage()];
+    this.totalUsage = { prompt: 0, completion: 0 };
     this.logger.logSystem("对话已重置");
     if (this.context) {
       this.logger.logSystem(`上下文已注入 (${this.context.summary.length} 字符)`);
     }
+  }
+
+  /** 获取累计 token 用量 */
+  getUsage() {
+    return { ...this.totalUsage };
   }
 
   /** 构建 system message */

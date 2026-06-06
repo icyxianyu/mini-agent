@@ -1,6 +1,6 @@
 # TODO — Mini Claude Code
 
-## 已完成
+## 已完成 基础功能
 
 - [x] 对话交互：流式 + 非流式，OpenAI/DeepSeek 多模型
 - [x] 文件操作：read/write/edit/delete/copy/move/list_dir/create_dir + 工作区校验
@@ -14,18 +14,21 @@
 - [x] 错误恢复：分类提示（ENOENT/EACCES/TIMEOUT）+ parse error 重试
 - [x] 会话管理：workspace 隔离 + 多会话 + list/load/new/delete 命令
 
+## 已完成 扩展功能
+- [x] **Token 计数**：API usage 提取 + 终端展示 + 累计统计
+
+
 ---
 
 ## 计划
 
 > 按依赖关系排列。被依赖的在前，依赖者在后。
-> 无依赖的可以任意顺序做，有依赖的等前置项完成后再做。
 
-### Token 计数
+### Token 计数 ✅
 *被「上下文窗口管理」「Plan 模式」依赖*
 
-- 非流式从 `response.usage` 读，流式从最后 chunk 获取
-- 终端每轮显示消耗 token，会话累计统计
+- 非流式从 `response.usage` 读，流式最后 chunk 获取
+- 终端显示本轮消耗 + 累计统计
 
 ### 网络重试
 *无依赖*

@@ -27,12 +27,21 @@ export interface ToolCall {
   arguments: Record<string, unknown>;
 }
 
+/** Token 用量 */
+export interface TokenUsage {
+  prompt: number;
+  completion: number;
+  total: number;
+}
+
 /** LLM 的统一回复 */
 export interface LLMResponse {
   /** 纯文本回复（如果是工具调用则为 null） */
   content: string | null;
   /** 工具调用列表（如果是文本回复则为空） */
   toolCalls: ToolCall[];
+  /** Token 用量（流式时从最后 chunk 获取，非流式直接读） */
+  usage?: TokenUsage;
 }
 
 // ─── LLM 客户端 ─────────────────────────────────────
@@ -80,6 +89,12 @@ export async function chat(options: ChatOptions): Promise<LLMResponse> {
     ...(tools ? { tools, tool_choice: "auto" } : {}),
   });
 
+  const usage: TokenUsage = {
+    prompt: response.usage?.prompt_tokens ?? 0,
+    completion: response.usage?.completion_tokens ?? 0,
+    total: response.usage?.total_tokens ?? 0,
+  };
+
   const choice = response.choices[0];
   const msg = choice.message;
 
@@ -93,21 +108,17 @@ export async function chat(options: ChatOptions): Promise<LLMResponse> {
           arguments: JSON.parse(tc.function.arguments),
         });
       } catch {
-        // LLM 返回了不完整/格式错误的 JSON → 作为错误提不
         if (logger) logger.logLLMResponse(choice.finish_reason, null, toolCalls);
-        return {
-          content: `❌ 工具调用参数格式错误，请用有效的 JSON 重试。\n工具: ${tc.function.name}\n收到: ${tc.function.arguments.slice(0, 200)}`,
-          toolCalls: [],
-        };
+        return { content: `❌ 工具调用参数格式错误，请用有效的 JSON 重试。\n工具: ${tc.function.name}\n收到: ${tc.function.arguments.slice(0, 200)}`, toolCalls: [], usage };
       }
     }
     if (logger) logger.logLLMResponse(choice.finish_reason, null, toolCalls);
-    return { content: null, toolCalls };
+    return { content: null, toolCalls, usage };
   }
 
   const content = msg.content ?? "";
   if (logger) logger.logLLMResponse(choice.finish_reason, content, null);
-  return { content, toolCalls: [] };
+  return { content, toolCalls: [], usage };
 }
 
 // ─── 流式对话 ───────────────────────────────────────
@@ -142,24 +153,33 @@ export async function chatStream(options: ChatStreamOptions): Promise<LLMRespons
     messages,
     temperature: 0.7,
     ...(tools ? { tools, tool_choice: "auto" } : {}),
-    stream: true, // ← 开启流式
+    stream: true,
+    stream_options: { include_usage: true }, // ← 让最后 chunk 带上 usage
   });
 
   let fullContent = "";
   let finishReason = "stop";
+  let usage: TokenUsage = { prompt: 0, completion: 0, total: 0 };
 
   // 流式 tool_calls 需要跨 chunk 累积
-  // key = tool_call index（OpenAI 在 delta.tool_calls[].index 中提供）
   const tcAccum: Map<number, { id: string; name: string; args: string }> = new Map();
 
   for await (const chunk of stream) {
     const delta = chunk.choices[0]?.delta;
-    if (!delta) continue;
 
-    // 累积 finish_reason（最后一个有效的 chunk 会带）
+    // 最后一个 chunk 带 finish_reason + usage（delta 可能为空）
     if (chunk.choices[0]?.finish_reason) {
       finishReason = chunk.choices[0].finish_reason;
     }
+    if (chunk.usage) {
+      usage = {
+        prompt: chunk.usage.prompt_tokens ?? 0,
+        completion: chunk.usage.completion_tokens ?? 0,
+        total: chunk.usage.total_tokens ?? 0,
+      };
+    }
+
+    if (!delta) continue;
 
     // 文本 token → 回调
     if (delta.content) {
@@ -193,18 +213,14 @@ export async function chatStream(options: ChatStreamOptions): Promise<LLMRespons
           arguments: JSON.parse(tc.args),
         });
       } catch {
-        // LLM 流式返回的 tool_calls 碎片拼出来不是有效 JSON
         if (logger) logger.logLLMResponse(finishReason, null, toolCalls);
-        return {
-          content: `❌ 工具调用参数格式错误，请用有效的 JSON 重试。\n工具: ${tc.name}\n拼装后: ${tc.args.slice(0, 200)}`,
-          toolCalls: [],
-        };
+        return { content: `❌ 工具调用参数格式错误，请用有效的 JSON 重试。\n工具: ${tc.name}\n拼装后: ${tc.args.slice(0, 200)}`, toolCalls: [], usage };
       }
     }
     if (logger) logger.logLLMResponse(finishReason, null, toolCalls);
-    return { content: null, toolCalls };
+    return { content: null, toolCalls, usage };
   }
 
   if (logger) logger.logLLMResponse(finishReason, fullContent, null);
-  return { content: fullContent, toolCalls: [] };
+  return { content: fullContent, toolCalls: [], usage };
 }

@@ -250,7 +250,10 @@ async function main() {
     try {
       process.stdout.write("\n" + chalk.green("🤖 Agent: "));
       await agent.chat(input);
-      process.stdout.write("\n\n");
+      const usage = agent.getUsage();
+      const total = usage.prompt + usage.completion;
+      const fmt = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+      process.stdout.write(`\n${chalk.dim(`⚡ 本轮 +${fmt(total)} tokens  |  累计 ${fmt (usage.prompt)}→${fmt(usage.completion)}`)}\n\n`);
       autoSave();
     } catch (e: any) {
       const errMsg = `❌ 错误: ${e.message}`;
