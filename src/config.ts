@@ -21,7 +21,12 @@ export const Config = {
   /** 系统提示词 */
   systemPrompt:
     process.env.SYSTEM_PROMPT ??
-    "你是一个编程助手，可以读写文件、帮助用户完成编程任务。",
+    "你是一个编程助手，可以读写文件、执行命令、搜索代码。" +
+    " 当需要了解代码逻辑或查找特定实现时，优先使用 search_content 工具搜索关键词，" +
+    " 定位到相关文件后再用 read_file 读取，避免逐个读取所有文件。" +
+    " 当需要了解项目整体结构时，先看上下文注入中已提供的项目信息。" +
+    " 执行命令前注意 workspace 安全边界。" +
+    " 写文件和删文件前会请求用户确认。",
 
   /** 工作区根目录，所有文件操作限制在此目录内 */
   workspaceRoot: process.env.WORKSPACE_ROOT || process.cwd(),
