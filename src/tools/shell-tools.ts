@@ -18,6 +18,26 @@ import { exec } from "node:child_process";
 import { ToolBase, ToolResult } from "./base.js";
 import { Config } from "../config.js";
 
+/** 危险命令模式（正则） */
+const DANGER_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /rm\s+-rf?\s/, label: "递归删除" },
+  { pattern: /git\s+push\s+--force/, label: "强制推送" },
+  { pattern: /git\s+push\s+-f\b/, label: "强制推送" },
+  { pattern: /\bsudo\b/, label: "管理员权限" },
+  { pattern: /chmod\s+777/, label: "放宽所有权限" },
+  { pattern: />\s*\/dev\//, label: "写入系统设备" },
+  { pattern: /mkfs\./, label: "格式化磁盘" },
+  { pattern: /dd\s+if=/, label: "磁盘操作" },
+  { pattern: /:\(\)\s*\{/, label: "fork 炸弹" },
+];
+
+/** 检查命令是否危险，返回危险标签列表 */
+export function checkDanger(command: string): string[] {
+  return DANGER_PATTERNS
+    .filter(p => p.pattern.test(command))
+    .map(p => p.label);
+}
+
 export class ShellCommandTool extends ToolBase {
   name = "execute_command";
   riskLevel = "execute" as const;

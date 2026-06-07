@@ -11,11 +11,14 @@
 - [x] 并行执行：Promise.all，1.6~3x 加速
 - [x] 上下文注入：9 种项目类型检测，配置/入口/Git/README 自动收集
 - [x] 安全机制：路径防越界 + 工具风险分级确认（Y/n/a/s）
+- [x] Shell 安全分级：`rm -rf`/`git push --force`/`sudo`/`chmod 777` 危险检测，⚠️ 警告，模式列表可 .env 配置
+- [x] 网络重试：5xx/timeout/429 自动重试 3 次，指数退避；4xx 不重试，流式+非流式都覆盖
 - [x] 错误恢复：分类提示（ENOENT/EACCES/TIMEOUT）+ parse error 重试
 - [x] 会话管理：workspace 隔离 + 多会话 + list/load/new/delete 命令
 
 ## 已完成 扩展功能
-- [x] **Token 计数**：API usage 提取 + 终端展示 + 累计统计
+- [x] **Token 计数**：API usage 提取 + 终端展示 + 累计统计（非流式从 `response.usage` 读，流式最后 chunk 获取）
+- [x] **大文件分段**：read_file 默认上限 200 行（可配置），超出展示总行数 + offset 翻页提示，对 LLM 透明
 
 
 ---
@@ -23,35 +26,6 @@
 ## 计划
 
 > 按依赖关系排列。被依赖的在前，依赖者在后。
-
-### Token 计数 ✅
-*被「上下文窗口管理」「Plan 模式」依赖*
-
-- 非流式从 `response.usage` 读，流式最后 chunk 获取
-- 终端显示本轮消耗 + 累计统计
-
-### 网络重试 ✅
-*无依赖*
-
-- 5xx/timeout/429 自动重试 3 次，指数退避；4xx 不重试
-- 流式 + 非流式都覆盖
-
-### 大文件分段 ✅
-*无依赖*
-
-**背景**：实测发现 LLM 即使搜到行号也不主动用 offset/limit，完整读文件浪费大量 token。
-**方案**：不改 LLM 行为，改工具默认行为——read_file 不指定 offset 时默认只返回前 200 行。
-
-- read_file 默认上限 200 行（可配置 `READ_FILE_DEFAULT_LIMIT`）
-- 超出部分展示总行数提示 + offset 翻页用法
-- 上下文注入已读过的文件部分不重复收 token
-- 对 LLM 透明：参数和接口不变，只是默认行为更保守
-
-### Shell 安全分级
-*无依赖*
-
-- `rm -rf`、`git push --force`、`sudo`、`chmod 777` 危险检测
-- 确认提示中额外 ⚠️ 警告，模式列表可 .env 配置
 
 ### 流式进度
 *无依赖*

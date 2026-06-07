@@ -19,6 +19,7 @@ import { Agent } from "./core.js";
 import { Logger } from "./logger.js";
 import { collectProjectContext } from "./context.js";
 import { SessionManager } from "./session.js";
+import { checkDanger } from "./tools/shell-tools.js";
 
 const BANNER = (logPath: string, sessionInfo: string, contextInfo?: string) => `
 ${chalk.cyan.bold("╔══════════════════════════════════════════╗")}
@@ -117,14 +118,18 @@ async function main() {
   const askConfirm = async (name: string, args: Record<string, unknown>, risk: string) => {
     if (autoApprove.has(name)) return true;
 
+    // 检查 shell 命令是否有危险操作
+    const dangerLabels = name === "execute_command" ? checkDanger((args.command as string) ?? "") : [];
     const riskIcon = risk === "delete" ? "⚠️ " : risk === "execute" ? "⚡ " : "✏️ ";
-    const riskLabel = risk === "delete" ? chalk.red(`${riskIcon}危险`) : risk === "execute" ? chalk.yellow(`${riskIcon}执行`) : chalk.cyan(`${riskIcon}写入`);
+    const riskLabel = risk === "delete" ? chalk.red(`${riskIcon}危险`)
+      : risk === "execute" ? chalk.yellow(`${riskIcon}执行`) : chalk.cyan(`${riskIcon}写入`);
     const argsStr = JSON.stringify(args);
     const shortArgs = argsStr.length > 100 ? argsStr.slice(0, 100) + "..." : argsStr;
 
     const prompt = [
       `\n  ${riskLabel} 允许执行 ${chalk.bold(name)}?`,
       `  ${chalk.dim(shortArgs)}`,
+      ...(dangerLabels.length > 0 ? [`  ${chalk.red.bold("⚠️ 检测到危险操作: " + dangerLabels.join("、"))}`] : []),
       `  ${chalk.dim("[Y] 允许  [n] 拒绝  [a] 本次会话始终允许  [s] 跳过此类工具")}`,
     ].join("\n") + " ";
 
