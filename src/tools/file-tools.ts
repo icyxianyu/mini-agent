@@ -26,6 +26,18 @@ import path from "node:path";
 import { ToolBase, ToolResult } from "./base.js";
 import { resolveWorkspacePath } from "./fs-utils.js";
 
+/** 源码文件后缀 */
+const SOURCE_EXTS = new Set([
+  ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+  ".py", ".java", ".go", ".rs", ".c", ".cpp", ".h", ".hpp",
+  ".cs", ".rb", ".php", ".swift", ".kt", ".scala", ".clj",
+  ".vue", ".svelte", ".astro",
+]);
+
+function isSourceFile(filePath: string): boolean {
+  return SOURCE_EXTS.has(path.extname(filePath).toLowerCase());
+}
+
 // ═══════════════════════════════════════════════════
 //  各工具实现
 // ═══════════════════════════════════════════════════
@@ -83,6 +95,11 @@ export class ReadFileTool extends ToolBase {
       if (remaining > 0) {
         const nextOffset = shownEnd + 1;
         result += `\n\n（共 ${totalLines} 行，已显示 ${baseLine}-${shownEnd} 行，剩余 ${remaining} 行。使用 offset=${nextOffset} 继续读取。）`;
+      }
+
+      // 无 offset 且为源码文件时，追加搜索提示
+      if (!offset && isSourceFile(filePath)) {
+        result += `\n\n💡 搜索优先：如需定位特定代码，使用 search_content 搜索关键词，再用 offset/limit 精读命中区域。`;
       }
 
       return ToolResult.ok(result);

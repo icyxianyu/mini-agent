@@ -75,3 +75,27 @@
 LLM 看到"返回了 200 行 + 剩余提示"后，自然学会了精确传 offset/limit 翻页——不是被 prompt 说服的，是被工具限制逼出来的。
 
 **教训：** 优化 LLM 行为有两个方向。prompt 引导是软的、边际递减的；工具限制是硬的、一次生效的。优先用后者。
+
+---
+
+## 3. 搜索优先强化——双管齐下
+
+**发现时间：** 2026-06-07
+
+**背景：** 用户问"search_content 返回给模型的数据是什么"，LLM 仍直接 `read_file(search-tools.ts)` 而不先用 `search_content` 定位。即使已有多轮 system prompt 迭代 + 工具 description 引导，搜索优先仍不稳定。
+
+**方案：** 方向 1 + 方向 2 组合
+
+**方向 1（prompt 强化）：** system prompt 规则 2 从语气升级为正反例：
+- 旧：`回答代码问题时遵循：search_content 定位 → read_file 精读。先搜后读。`
+- 新：`⚠️ 探索/理解代码逻辑时必须先 search_content 定位，禁止在搜索前直接 read_file。✅ 正确 / ❌ 错误 正反例`
+
+**方向 2（工具返回暗示）：** `read_file` 无 offset 读取源码文件时，返回内容末尾追加：
+```
+💡 搜索优先：如需定位特定代码，使用 search_content 搜索关键词，再用 offset/limit 精读命中区域。
+```
+- 仅对源码文件（.ts/.js/.py 等）追加该提示
+- 对 .md/.json/.yml 等非源码文件不追加
+- 对指定了 offset 的精读不追加（说明 LLM 已在搜索后精读）
+
+**原理：** LLM 对工具返回内容高度敏感。该提示直接进入消息历史，下一轮推理时能看到，比 system prompt 距离推理点更近。

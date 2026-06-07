@@ -258,7 +258,7 @@ async function main() {
       const usage = agent.getUsage();
       const total = usage.prompt + usage.completion;
       const fmt = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
-      process.stdout.write(`\n${chalk.dim(`⚡ 本轮 +${fmt(total)} tokens  |  累计 ${fmt (usage.prompt)}→${fmt(usage.completion)}`)}\n\n`);
+      process.stdout.write(`\n${chalk.dim(`⚡ 本轮 +${fmt(total)} tokens  |  累计 输入${fmt(usage.prompt)} 输出${fmt(usage.completion)}`)}\n\n`);
       autoSave();
     } catch (e: any) {
       const errMsg = `❌ 错误: ${e.message}`;
