@@ -64,6 +64,44 @@ export interface ChatStreamOptions extends ChatOptions {
   onToken?: (text: string) => void;
 }
 
+// ─── 网络重试 ───────────────────────────────────────
+
+/** 判断错误是否应该重试 */
+function shouldRetry(err: unknown): boolean {
+  if (err instanceof OpenAI.APIError) {
+    // 5xx 服务端错误 → 重试
+    if (err.status && err.status >= 500) return true;
+    // 429 限流 → 重试
+    if (err.status === 429) return true;
+    // 4xx 客户端错误 → 不重试
+    return false;
+  }
+  // 网络层错误（连接失败、DNS 解析失败、超时）→ 重试
+  return true;
+}
+
+/** 带指数退避的重试包装器 */
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  label: string,
+  maxRetries = 3,
+): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fn();
+    } catch (e: any) {
+      if (!shouldRetry(e) || attempt >= maxRetries) throw e;
+      attempt++;
+      const delay = Math.pow(2, attempt - 1) * 1000; // 1s → 2s → 4s
+      console.log(`  🔄 ${label} 第 ${attempt} 次重试 (${delay / 1000}s 后)...`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+}
+
+// ─── 对话函数 ───────────────────────────────────────
+
 /**
  * 非流式对话（用于保底总结等短回复场景）
  */
@@ -82,12 +120,15 @@ export async function chat(options: ChatOptions): Promise<LLMResponse> {
     );
   }
 
-  const response = await client.chat.completions.create({
-    model: Config.model,
-    messages,
-    temperature: 0.7,
-    ...(tools ? { tools, tool_choice: "auto" } : {}),
-  });
+  const response = await withRetry(
+    () => client.chat.completions.create({
+      model: Config.model,
+      messages,
+      temperature: 0.7,
+      ...(tools ? { tools, tool_choice: "auto" } : {}),
+    }),
+    "LLM 调用",
+  );
 
   const usage: TokenUsage = {
     prompt: response.usage?.prompt_tokens ?? 0,
@@ -148,14 +189,17 @@ export async function chatStream(options: ChatStreamOptions): Promise<LLMRespons
     );
   }
 
-  const stream = await client.chat.completions.create({
-    model: Config.model,
-    messages,
-    temperature: 0.7,
-    ...(tools ? { tools, tool_choice: "auto" } : {}),
-    stream: true,
-    stream_options: { include_usage: true }, // ← 让最后 chunk 带上 usage
-  });
+  const stream = await withRetry(
+    () => client.chat.completions.create({
+      model: Config.model,
+      messages,
+      temperature: 0.7,
+      ...(tools ? { tools, tool_choice: "auto" } : {}),
+      stream: true,
+      stream_options: { include_usage: true },
+    }),
+    "LLM 流式调用",
+  );
 
   let fullContent = "";
   let finishReason = "stop";
