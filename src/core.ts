@@ -29,13 +29,58 @@
  *    （比如反复读取同一文件，或工具返回错误后死循环重试）
  */
 import type OpenAI from "openai";
+import { encodeChat } from "gpt-tokenizer";
 import { Config } from "./config.js";
-import { chat, chatStream, type LLMResponse } from "./llm.js";
+import { chat, chatStream, type LLMResponse, type ToolCall } from "./llm.js";
 import { getTool, getAllToolSchemas } from "./tools/index.js";
 import type { Logger } from "./logger.js";
 import type { ProjectContext } from "./context.js";
 
 export type Message = OpenAI.Chat.Completions.ChatCompletionMessageParam;
+
+const THRESHOLD = 0.8; // 超 80% 触发裁剪
+const KEEP_ROUNDS = 5; // 保留最近 N 轮
+
+/**
+ * 精确 token 计数。使用 gpt-tokenizer 的 encodeChat，
+ * 会计算 OpenAI chat 格式中自动注入的特殊 token（每条消息的 role 标记等），
+ * 比字符数/4 准确得多。DeepSeek 使用 cl100k_base 类似编码，用 'gpt-4' 模型参数即可。
+ */
+function estimateTokens(messages: Message[]): number {
+  // 过滤内容中的 OpenAI 特殊 token（否则 encodeChat 会报 Disallowed special token）
+  const sanitize = (s: string) => s.replace(/<\|im_start\|>/g, "[im_start]").replace(/<\|im_end\|>/g, "[im_end]");
+  const simplified = messages.map((m) => ({
+    role: m.role as "system" | "user" | "assistant" | "function",
+    content: sanitize(
+      typeof m.content === "string" ? m.content
+      : Array.isArray(m.content) ? JSON.stringify(m.content)
+      : (m as any).tool_calls ? JSON.stringify((m as any).tool_calls)
+      : "",
+    ),
+  }));
+  return encodeChat(simplified, "gpt-4").length;
+}
+
+/** 将消息按"用户输入 → 下一用户输入前"拆分为轮次（不包含 system） */
+function splitRounds(messages: Message[]): Message[][] {
+  const rounds: Message[][] = [];
+  let current: Message[] = [];
+  let started = false;
+
+  for (const msg of messages) {
+    if (msg.role === "system") continue;
+
+    if (msg.role === "user" && started) {
+      rounds.push(current);
+      current = [];
+    }
+    started = true;
+    current.push(msg);
+  }
+  if (current.length > 0) rounds.push(current);
+
+  return rounds;
+}
 
 export class Agent {
   /** 对话历史 */
@@ -74,11 +119,14 @@ export class Agent {
 
   /** 处理一次用户输入，返回最终回复 */
   async chat(userInput: string): Promise<string> {
-    // 1. 用户消息加入历史
+    // 1. 上下文窗口管理：基于已完成的对话，超 80% 上限时裁剪旧轮次
+    await this.compressHistory();
+
+    // 2. 用户消息加入历史
     this.messages.push({ role: "user", content: userInput });
     this.logger.logUserInput(userInput);
 
-    // 2. Agent Loop：不断调用 LLM，直到它不再请求工具
+    // 3. Agent Loop：不断调用 LLM，直到它不再请求工具
     for (let round = 0; round < Config.maxToolRounds; round++) {
       const response = await chatStream({
         messages: this.messages,
@@ -111,22 +159,40 @@ export class Agent {
         return reply;
       }
 
-      // 情况B: LLM 请求调用工具 → 并行执行
+      // 情况B: LLM 请求调用工具
       this.messages.push(this.formatToolCallsMessage(response));
 
-      const results = await Promise.all(
-        response.toolCalls.map(async (tc) => {
-          this.logger.logToolExecution(tc.name, tc.arguments);
-          const content = await this.executeTool(tc.name, tc.arguments);
-          return { id: tc.id, content };
-        }),
-      );
+      // 有需要确认的工具时串行执行（避免多个 rl.question 冲突）
+      const needsConfirm = Config.enableToolConfirmation && this.askConfirm
+        && response.toolCalls.some((tc) => {
+          const tool = getTool(tc.name);
+          return tool && tool.riskLevel !== "read";
+        });
 
-      for (const r of results) {
+      const execResults = new Map<string, string>();
+      if (needsConfirm) {
+        const results = await this.executeToolsSerially(response.toolCalls);
+        for (const r of results) execResults.set(r.id, r.content);
+      } else {
+        const settled = await Promise.allSettled(
+          response.toolCalls.map(async (tc) => {
+            this.logger.logToolExecution(tc.name, tc.arguments);
+            const content = await this.executeTool(tc.name, tc.arguments);
+            return { id: tc.id, content };
+          }),
+        );
+        for (const s of settled) {
+          if (s.status === "fulfilled") execResults.set(s.value.id, s.value.content);
+          else this.logger.logError(`工具执行异常: ${s.reason?.message ?? s.reason}`);
+        }
+      }
+
+      // 确保每个 tool_call_id 都有对应的 tool 消息（API 强制要求）
+      for (const tc of response.toolCalls) {
         this.messages.push({
           role: "tool",
-          tool_call_id: r.id,
-          content: r.content,
+          tool_call_id: tc.id,
+          content: execResults.get(tc.id) ?? `❌ 工具 ${tc.name} 执行中断: ${tc.id}`,
         });
       }
     }
@@ -199,6 +265,22 @@ export class Agent {
     }
   }
 
+  /** 串行执行工具（有确认需求时使用，避免 rl.question 冲突） */
+  private async executeToolsSerially(toolCalls: ToolCall[]): Promise<{ id: string; content: string }[]> {
+    const results: { id: string; content: string }[] = [];
+    for (const tc of toolCalls) {
+      try {
+        this.logger.logToolExecution(tc.name, tc.arguments);
+        const content = await this.executeTool(tc.name, tc.arguments);
+        results.push({ id: tc.id, content });
+      } catch (e: any) {
+        this.logger.logError(`工具 ${tc.name} 执行异常: ${e.message}`);
+        results.push({ id: tc.id, content: `❌ 工具 ${tc.name} 执行异常: ${e.message}` });
+      }
+    }
+    return results;
+  }
+
   /** 格式化工具错误，帮助 LLM 理解并自动恢复 */
   private formatError(name: string, args: Record<string, unknown>, msg: string): string {
     const argsPreview = JSON.stringify(args).slice(0, 150);
@@ -212,6 +294,131 @@ export class Agent {
       hint = `\n💡 提示: 命令超时，请尝试拆分命令、减少范围或增加 timeout 参数。`;
     }
     return `❌ ${name}(${argsPreview}) 失败: ${msg}${hint}`;
+  }
+
+  /** 上下文窗口管理：超 80% 上限时逐步裁剪旧轮次 */
+  private async compressHistory(): Promise<void> {
+    const limit = Config.modelContextLimit;
+    const estimated = estimateTokens(this.messages);
+
+    if (estimated < limit * THRESHOLD) return;
+    if (this.messages.length <= 1) return; // 只有 system，无需裁剪
+
+    const systemMsg = this.messages[0];
+    const rounds = splitRounds(this.messages);
+
+    if (rounds.length <= 1) return;
+
+    let keepCount = Math.min(KEEP_ROUNDS, rounds.length - 1);
+    this.logger.logSystem(
+      `上下文超标: 估算 ${estimated} tokens / ${limit} (${rounds.length} 轮) → 尝试压缩保留 ${keepCount} 轮`,
+    );
+
+    // 尝试 LLM 摘要：失败则回退到简单截断
+    const { summary, success } = await this.trySummarize(rounds, keepCount);
+    if (!success) {
+      // 摘要失败 → 直接截断到保留轮次
+      const keepRounds = rounds.slice(-keepCount);
+      this.messages = [systemMsg, ...keepRounds.flat()];
+      this.logger.logSystem(`摘要失败，回退到简单截断: 保留 ${keepCount} 轮`);
+      return;
+    }
+
+    // 重建消息：system + 摘要 + 保留轮次
+    const keepRounds = rounds.slice(-keepCount);
+    this.messages = [
+      systemMsg,
+      { role: "user", content: `[对话历史摘要]\n${summary}` },
+      { role: "assistant", content: "已了解对话背景。" },
+      ...keepRounds.flat(),
+    ];
+
+    const newEstimated = estimateTokens(this.messages);
+    this.logger.logSystem(
+      `上下文已压缩: ${rounds.length} 轮 → 保留 ${keepCount} 轮 + 摘要 (${summary.length} 字符)` +
+        ` | 估算 ${estimated}→${newEstimated} tokens`,
+    );
+
+    // 压缩后验证：仍超标则减少保留轮次
+    while (newEstimated >= limit * THRESHOLD && keepCount > 1) {
+      keepCount--;
+      const tighterKeep = rounds.slice(-keepCount);
+      this.messages = [
+        systemMsg,
+        { role: "user", content: `[对话历史摘要]\n${summary}` },
+        { role: "assistant", content: "已了解对话背景。" },
+        ...tighterKeep.flat(),
+      ];
+      this.logger.logSystem(
+        `压缩后仍超标，减少保留轮次: ${keepCount + 1} → ${keepCount} | 估算 ${estimateTokens(this.messages)} tokens`,
+      );
+    }
+
+    // 最终兜底：只剩 1 轮仍超标 → 硬截断该轮
+    if (estimateTokens(this.messages) >= limit * THRESHOLD && keepCount === 1) {
+      const lastRound = rounds[rounds.length - 1];
+      const head = lastRound.slice(0, 5);
+      const tail = lastRound.slice(-3);
+      this.messages = [systemMsg, ...head, ...tail];
+      this.logger.logSystem(
+        `硬截断: 仍超标，暴击截断最后一轮 (${lastRound.length} → ${head.length + tail.length} 条消息)`,
+      );
+    }
+  }
+
+  /** 尝试生成对话摘要。返回 { summary, success }，失败时 success=false */
+  private async trySummarize(
+    rounds: Message[][],
+    keepCount: number,
+  ): Promise<{ summary: string; success: boolean }> {
+    const oldRounds = rounds.slice(0, rounds.length - keepCount);
+    if (oldRounds.length === 0) return { summary: "", success: false };
+
+    // 构建摘要输入：保留工具调用链路 + 防嵌套退化
+    const oldText = oldRounds.map((r, i) => {
+      const userMsg = r.find((m) => m.role === "user");
+      const userContent = (userMsg?.content as string) ?? "";
+
+      // 已是压缩摘要 → 原文照搬，避免"摘要的摘要"退化
+      if (userContent.startsWith("[对话历史摘要]")) {
+        return `历史摘要:\n${userContent}`;
+      }
+
+      // 提取工具调用记录
+      const toolCalls = r
+        .filter((m) => m.role === "assistant" && (m as any).tool_calls)
+        .flatMap((m) =>
+          ((m as any).tool_calls as any[])?.map((tc: any) => tc.function?.name).filter(Boolean) ?? [],
+        );
+      const toolText = toolCalls.length > 0 ? `\n  工具调用: ${toolCalls.join(" → ")}` : "";
+
+      // 提取最后一条有文本的 assistant 回复
+      const lastAssistant = [...r].reverse().find(
+        (m) => m.role === "assistant" && (m as any).content,
+      );
+      const assistantText = (lastAssistant as any)?.content
+        ? ((lastAssistant as any).content as string).slice(0, 300)
+        : "(工具调用)";
+
+      return `轮次${i + 1}:\n  用户: ${userContent.slice(0, 200)}${toolText}\n  助手: ${assistantText}`;
+    }).join("\n\n");
+
+    try {
+      const summaryResult = await chat({
+        messages: [
+          {
+            role: "user",
+            content: `以下是一段对话历史。请用简洁中文汇总关键决策和成果（不超过300字），只输出摘要文本：\n\n${oldText}`,
+          },
+        ],
+        logger: this.logger,
+      });
+      const summary = (summaryResult.content ?? "").slice(0, 500);
+      return { summary, success: true };
+    } catch (e: any) {
+      this.logger.logError(`摘要生成失败: ${e.message}`);
+      return { summary: "", success: false };
+    }
   }
 
   /** 将 LLMResponse.toolCalls 转成 OpenAI 格式的 assistant 消息 */
@@ -240,9 +447,21 @@ export class Agent {
     }
   }
 
-  /** 获取累计 token 用量 */
+  /** 获取累计 token 用量（会话级别） */
   getUsage() {
     return { ...this.totalUsage };
+  }
+
+  /** 获取当前上下文窗口占用情况 */
+  getContextUsage(): { current: number; limit: number; threshold: number; percent: number } {
+    const limit = Config.modelContextLimit;
+    const current = estimateTokens(this.messages);
+    return {
+      current,
+      limit,
+      threshold: Math.floor(limit * THRESHOLD),
+      percent: Math.round((current / limit) * 100),
+    };
   }
 
   /** 构建 system message */

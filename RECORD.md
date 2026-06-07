@@ -99,3 +99,99 @@ LLM 看到"返回了 200 行 + 剩余提示"后，自然学会了精确传 offse
 - 对指定了 offset 的精读不追加（说明 LLM 已在搜索后精读）
 
 **原理：** LLM 对工具返回内容高度敏感。该提示直接进入消息历史，下一轮推理时能看到，比 system prompt 距离推理点更近。
+
+---
+
+## 4. Token 计数不准确 + 上下文窗口 vs 累计用量混淆
+
+**发现时间：** 2026-06-07
+
+**现象：** 终端显示 "⚡ 本轮 +304.7k tokens"，但 compressHistory 从未触发，怀疑压缩有 bug。
+
+**根因 1 — 标签误导：** "本轮" 实际显示的是 `totalUsage`（会话累计所有 API 调用的输入+输出总和），不是单次 API 调用的 messages 大小。真正应该关心的是每次调用时 `compressHistory` 检查的 messages token 数。
+
+**根因 2 — 计数不准：** `estimateTokens` 用的是 `JSON.stringify(messages).length / 4`，实测比真实 token 数低 16~26%（中文场景偏差更大）。导致 messages 实际已经接近上限，估算值还远未到 80% 阈值。
+
+**修复方式：**
+
+1. **精确计数**：用 `gpt-tokenizer` 的 `encodeChat` 替代字符数/4。`encodeChat` 会计算 OpenAI 协议层注入的特殊 token（每条消息的 role 标记等）。
+   - 实测：中文对话场景偏差从 -26% 降到 0%
+
+2. **显示改进**：终端输出改为 `📊 上下文 88.5k/128k (69%) | ⚡ 累计 输入134.1k 输出4.5k`
+   - 左侧：当前 messages 实际占用 / 窗口上限 + 百分比
+   - 右侧：会话累计开销
+   - ≥80% 变黄提醒
+
+**教训：** "本轮" 这种模糊标签是万恶之源。累计和上下文窗口是两个完全不同的概念，展示时必须明确区分。
+
+---
+
+## 5. compressHistory 的 5 个结构性缺陷
+
+**发现时间：** 2026-06-07
+
+发现压缩函数存在以下问题：
+
+| # | 问题 | 修复 |
+|---|------|------|
+| 1 | 压缩时机：用户新消息先 push 再压缩，挤占保留配额 | 先 `compressHistory()` 再 `push` |
+| 2 | 摘要丢失工具链路：oldText 只取 user+assistant 文本，tool_call/tool_result 被跳过 | oldText 新增 `工具调用: read_file → edit_file` 行 |
+| 3 | 摘要嵌套退化：压缩后的摘要轮次被再次总结，信息指数级衰减 | 检测 `[对话历史摘要]` 前缀，原文照搬 |
+| 4 | 不验证压缩效果：只打日志不检查是否真降到阈值以下 | while 循环逐步减少 keepCount，最后硬截断兜底 |
+| 5 | 无错误处理：摘要 API 失败整个对话崩 | `trySummarize()` 返回 `{success}`，失败回退简单截断 |
+
+修复后压缩链路：
+```
+超标 → 提取工具链路 + 防嵌套 → LLM 摘要
+  ├─ 成功 → 验证 → 仍超标则减 keepCount → 仍超标硬截断
+  └─ 失败 → 回退简单截断
+```
+
+---
+
+## 6. 并行工具执行导致 readline 确认冲突
+
+**发现时间：** 2026-06-07
+
+**现象：** 当多个 `execute_command` 同时出现在一批 tool_calls 中时，`Promise.all` 并行执行使多个 `rl.question` 同时活跃，导致：
+- 输入框被上次输出的 `⏳ execute_command {args}` 污染
+- 确认行为不可预测
+- 对话可能中途卡死
+
+**根因：** `executeTool` 中对 `riskLevel !== "read"` 的工具调用 `askConfirm`，而 `askConfirm` 内部用 `rl.question`。Node.js readline 不支持同时多个 `question`。
+
+**修复方式：** 检测批次中是否有需确认的工具，有则串行执行（`executeToolsSerially`），无则保持并行。
+```
+批次中 any tool.riskLevel !== "read"？
+  ├─ 是 → 串行（一个接一个确认）
+  └─ 否 → 并行（Promise.all，读操作不受影响）
+```
+
+---
+
+## 7. encodeChat 遇到特殊 token 报错
+
+**发现时间：** 2026-06-07
+
+**现象：** `❌ 错误: Disallowed special token found: <|im_start|>`
+
+**根因：** LLM 回复中提到了 OpenAI chat format 协议（如 `<|im_start|>` 和 `<|im_end|>`），这些文本被写入 messages。`gpt-tokenizer` 的 `encodeChat` 检测到内容中有协议保留 token，误以为在注入控制指令，直接抛错。
+
+**修复方式：** 在 `estimateTokens` 中 `sanitize` 替换：`<|im_start|>` → `[im_start]`、`<|im_end|>` → `[im_end]`。替换后 token 数不变（都是 1 个特殊 token）。
+
+---
+
+## 8. tool_call_id 缺失导致 API 400 错误
+
+**发现时间：** 2026-06-07
+
+**现象：** `❌ 错误: 400 An assistant message with 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'`
+
+**根因：** 工具执行中途抛异常时，assistant 的 `tool_calls` 已推入 messages，但部分 tool result 未推送。OpenAI API 要求每个 `tool_call_id` 必须有对应的 tool 消息，严格成对校验。
+
+**修复方式：**
+1. 串行路径 `executeToolsSerially` 中每个工具独立 try-catch，失败不阻断后续
+2. 并行路径 `Promise.all` → `Promise.allSettled`，部分失败不丢结果
+3. 兜底：遍历 `response.toolCalls`，未拿到结果的补 `❌ 工具 xxx 执行中断` 占位
+
+**验证：** 改 `MODEL_CONTEXT_LIMIT=28000` 测试压缩，对话中出现 113%→57% 的上下文缩减，compressHistory 生效确认。

@@ -52,6 +52,9 @@ export const Config = {
   /** 目录树根层级最大条目数 */
   contextMaxTopEntries: Number(process.env.CONTEXT_MAX_TOP_ENTRIES) || 30,
 
+  /** 模型上下文上限（token 数），必须通过 .env 设置 */
+  modelContextLimit: Number(process.env.MODEL_CONTEXT_LIMIT) || 0,
+
   /** 最大工具调用轮数（防止 LLM 陷入死循环） */
   maxToolRounds: Number(process.env.MAX_TOOL_ROUNDS) || 10,
 
@@ -59,6 +62,10 @@ export const Config = {
   validate(): boolean {
     if (!this.apiKey) {
       console.error("❌ LLM_API_KEY 未设置，请检查 .env 文件");
+      return false;
+    }
+    if (!this.modelContextLimit) {
+      console.error("❌ MODEL_CONTEXT_LIMIT 未设置，请检查 .env 文件\n  例: MODEL_CONTEXT_LIMIT=128000");
       return false;
     }
     return true;
