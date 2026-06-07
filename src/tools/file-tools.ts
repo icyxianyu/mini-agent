@@ -52,6 +52,7 @@ export class ReadFileTool extends ToolBase {
 
     const offset = args.offset as number | undefined;
     const limit = args.limit as number | undefined;
+    const DEFAULT_LIMIT = 200; // 无 offset 时默认只返回前 200 行
 
     if (!fs.existsSync(resolved)) return ToolResult.fail(`文件不存在: ${filePath}`);
     const stat = fs.statSync(resolved);
@@ -59,19 +60,32 @@ export class ReadFileTool extends ToolBase {
 
     try {
       const raw = fs.readFileSync(resolved, "utf-8");
-      let lines = raw.split("\n");
+      const allLines = raw.split("\n");
+      const totalLines = allLines.length;
 
-      if (limit !== undefined) {
-        const start = Math.max(0, (offset ?? 1) - 1);
-        lines = lines.slice(start, start + limit);
-      }
+      // 未指定 limit：offset 存在时读余下全部，无 offset 时默认仅前 DEFAULT_LIMIT 行
+      const effectiveLimit = limit
+        ?? (offset ? Math.max(0, totalLines - (offset - 1)) : Math.min(DEFAULT_LIMIT, totalLines));
+
+      const start = Math.max(0, (offset ?? 1) - 1);
+      const lines = allLines.slice(start, start + effectiveLimit);
 
       const baseLine = offset ?? 1;
-      const result = lines
+      let result = lines
         .map((line, i) => `${String(baseLine + i).padStart(6)}|${line}`)
         .join("\n");
 
-      return ToolResult.ok(result || "(文件为空)");
+      if (!result) result = "(文件为空)";
+
+      // 如果文件还有更多行，提示剩余行数
+      const shownEnd = baseLine + lines.length - 1;
+      const remaining = totalLines - shownEnd;
+      if (remaining > 0) {
+        const nextOffset = shownEnd + 1;
+        result += `\n\n（共 ${totalLines} 行，已显示 ${baseLine}-${shownEnd} 行，剩余 ${remaining} 行。使用 offset=${nextOffset} 继续读取。）`;
+      }
+
+      return ToolResult.ok(result);
     } catch (e: any) {
       return ToolResult.fail(`读取失败: ${e.message}`);
     }
