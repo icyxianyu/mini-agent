@@ -23,6 +23,7 @@
 - [x] **上下文窗口管理**：每轮估算 token，超模型上限 80% 时 LLM 自摘要旧轮次，保留 system + 最近 5 轮
 - [x] **精确 Token 计数**：用 gpt-tokenizer 的 encodeChat 替代字符数/4 估算，偏差从 -26% 降到 0%
 - [x] **低轮次压缩修复**：不足 5 轮时允许压缩（保留至少 1 轮），避免早期超大上下文撑爆
+- [x] **Web 内容获取**：fetch_url 工具，HTTP GET → HTML 提取纯文本，5s 超时，1MB 上限
 
 
 ---
@@ -30,6 +31,7 @@
 ## 计划
 
 > 按依赖关系排列。被依赖的在前，依赖者在后。
+
 
 ### 工具结果预算管理
 *依赖「上下文窗口管理」*
@@ -49,12 +51,6 @@
 
 - 检测系统有 rg 时切换 ripgrep（10~100x），无则 fallback 纯 JS
 - 工具名和参数对 LLM 透明
-
-### Web 内容获取
-*无强制依赖*
-
-- `fetch_url` 工具：HTTP GET → 提取正文 → Markdown
-- 5s 超时，1MB 上限，去掉 script/style/nav
 
 ### 项目规则配置
 *参考「上下文窗口管理」*
@@ -110,6 +106,7 @@
 
 - MCP client（stdio + HTTP），`.mini-agent/mcp.json` 配置
 - MCP 工具和内置工具统一注册表
+- Web 搜索：通过接入 Brave/Tavily Search MCP Server 实现，解决国内网络限制
 
 ### Web UI
 *依赖前面所有（最后一步）*

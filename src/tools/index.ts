@@ -25,6 +25,9 @@ import { ShellCommandTool } from "./shell-tools.js";
 // 内容搜索工具
 import { SearchContentTool } from "./search-tools.js";
 
+// Web 内容获取工具
+import { FetchUrlTool } from "./web-tools.js";
+
 /** 所有可用工具实例 */
 export const allTools: BaseTool[] = [
   // 文件操作
@@ -40,6 +43,8 @@ export const allTools: BaseTool[] = [
   new ShellCommandTool(),
   // 内容搜索
   new SearchContentTool(),
+  // Web 内容获取
+  new FetchUrlTool(),
 ];
 
 /** 根据名称查找工具 */
