@@ -155,10 +155,12 @@ export class Agent {
     name: string,
     args: Record<string, unknown>,
   ): Promise<string> {
+    const argsPreview = JSON.stringify(args).slice(0, 80);
     const tool = getTool(name);
     if (!tool) {
       const err = `❌ 未知工具: ${name}`;
       this.logger.logToolResult(false, err);
+      console.log(`  ✗ ${name}  未知工具  ${argsPreview}`);
       return err;
     }
 
@@ -168,26 +170,31 @@ export class Agent {
       if (!approved) {
         const err = `🚫 用户拒绝了工具调用: ${name} —— 请换一种方式或跳过此步骤`;
         this.logger.logToolResult(false, err);
+        console.log(`  ✗ ${name}  已拒绝  ${argsPreview}`);
         return err;
       }
     }
 
-    console.log(`\n  🔧 调用工具: ${name}(${JSON.stringify(args)})`);
+    // 流式进度：显示执行状态
+    console.log(`  ⏳ ${name} ${argsPreview}`);
 
     try {
       const result = await tool.execute(args);
       if (result.success) {
         this.logger.logToolResult(true, result.content);
+        console.log(`  ✓ ${name} ${argsPreview}`);
         return result.content;
       }
 
       // 失败 → 结构化错误，引导 LLM 恢复
       const err = this.formatError(name, args, result.error ?? "未知错误");
       this.logger.logToolResult(false, err);
+      console.log(`  ✗ ${name}  失败  ${argsPreview}`);
       return err;
     } catch (e: any) {
       const err = this.formatError(name, args, e.message);
       this.logger.logToolResult(false, err);
+      console.log(`  ✗ ${name}  异常  ${argsPreview}`);
       return err;
     }
   }
