@@ -24,6 +24,7 @@
 - [x] **精确 Token 计数**：用 gpt-tokenizer 的 encodeChat 替代字符数/4 估算，偏差从 -26% 降到 0%
 - [x] **低轮次压缩修复**：不足 5 轮时允许压缩（保留至少 1 轮），避免早期超大上下文撑爆
 - [x] **Web 内容获取**：fetch_url 工具，HTTP GET → HTML 提取纯文本，5s 超时，1MB 上限
+- [x] **工具结果预算管理**：middle truncation 硬截断（256 行 / 10KiB）+ Microcompact 旧 tool_result → `[Old tool result content cleared]` 占位符，对齐 Claude Code/Codex，零 API 调用
 
 
 ---
@@ -31,14 +32,6 @@
 ## 计划
 
 > 按依赖关系排列。被依赖的在前，依赖者在后。
-
-
-### 工具结果预算管理
-*依赖「上下文窗口管理」*
-
-- read_file / search_content 返回结果超过阈值时，完整内容落盘 `.mini-agent/tool-results/`，消息中只保留摘要行 + 路径标记
-- 定期清理旧轮次的工具输出替换为 `[Old tool result content cleared]`，保留工具调用记录
-- 效果：减少 compressHistory 的 LLM 调用频率，大部分场景靠本地操作就能腾空间
 
 ### 编辑预览
 *无强制依赖*

@@ -60,7 +60,7 @@ export class FetchUrlTool extends ToolBase {
         url,
         {
           headers: {
-            "User-Agent": "MiniAgent/0.1",
+            "User-Agent": "Mozilla/5.0 (compatible; MiniAgent/0.1; +https://github.com)",
             Accept: "text/html,text/plain",
           },
           timeout: TIMEOUT_MS,

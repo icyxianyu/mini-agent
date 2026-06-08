@@ -94,7 +94,8 @@ export class ReadFileTool extends ToolBase {
       const remaining = totalLines - shownEnd;
       if (remaining > 0) {
         const nextOffset = shownEnd + 1;
-        result += `\n\n（共 ${totalLines} 行，已显示 ${baseLine}-${shownEnd} 行，剩余 ${remaining} 行。使用 offset=${nextOffset} 继续读取。）`;
+        const chunkSize = 200; // 建议分块大小
+        result += `\n\n⚠️ 文件未读完！共 ${totalLines} 行，已显示 ${baseLine}-${shownEnd} 行，剩余 ${remaining} 行。应一次性并行读取所有缺失部分，例如：read_file(offset=${nextOffset}, limit=${chunkSize})、read_file(offset=${nextOffset + chunkSize}, limit=${chunkSize})... 不要逐页串行读。`;
       }
 
       // 无 offset 且为源码文件时，追加搜索提示

@@ -40,6 +40,34 @@ export type Message = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
 const THRESHOLD = 0.8; // 超 80% 触发裁剪
 const KEEP_ROUNDS = 5; // 保留最近 N 轮
+const TOOL_RESULT_PLACEHOLDER = "[Old tool result content cleared]";
+
+/** 工具输出 middle truncation：保留首尾 + 省略标记 */
+function middleTruncate(content: string, maxLines: number, maxBytes: number): string {
+  const lines = content.split("\n");
+  const bytes = Buffer.byteLength(content, "utf-8");
+
+  const overLines = lines.length > maxLines;
+  const overBytes = bytes > maxBytes;
+
+  if (!overLines && !overBytes) return content;
+
+  // 首尾各保留约 30%
+  const headLines = Math.max(2, Math.floor(maxLines * 0.3));
+  const tailLines = Math.max(2, Math.floor(maxLines * 0.3));
+  const omitted = lines.length - headLines - tailLines;
+
+  const head = lines.slice(0, headLines);
+  const tail = lines.slice(-tailLines);
+  const headBytes = Buffer.byteLength(head.join("\n"), "utf-8");
+  const tailBytes = Buffer.byteLength(tail.join("\n"), "utf-8");
+  const omittedBytes = bytes - headBytes - tailBytes;
+
+  // 提示语保持极简（每次截断都会注入到 messages，避免累积 token 浪费）
+  const marker = `[... omitted ${omitted} lines, ${omittedBytes} bytes — if you need details, fetch more specific URL/section/API endpoint ...]`;
+
+  return [...head, marker, ...tail].join("\n");
+}
 
 /**
  * 精确 token 计数。使用 gpt-tokenizer 的 encodeChat，
@@ -119,10 +147,13 @@ export class Agent {
 
   /** 处理一次用户输入，返回最终回复 */
   async chat(userInput: string): Promise<string> {
-    // 1. 上下文窗口管理：基于已完成的对话，超 80% 上限时裁剪旧轮次
+    // 1. Microcompact：每轮零成本清理旧轮次 tool_result（对齐 Claude Code）
+    this.microcompact();
+
+    // 2. 上下文窗口管理：超 80% 上限时 LLM 摘要裁剪旧轮次
     await this.compressHistory();
 
-    // 2. 用户消息加入历史
+    // 3. 用户消息加入历史
     this.messages.push({ role: "user", content: userInput });
     this.logger.logUserInput(userInput);
 
@@ -247,9 +278,15 @@ export class Agent {
     try {
       const result = await tool.execute(args);
       if (result.success) {
-        this.logger.logToolResult(true, result.content);
+        // 硬截断：超出阈值的工具输出做 middle truncation（对齐 Codex）
+        const truncated = middleTruncate(
+          result.content,
+          Config.toolResultMaxLines,
+          Config.toolResultMaxBytes,
+        );
+        this.logger.logToolResult(true, truncated);
         console.log(`  ✓ ${name} ${argsPreview}`);
-        return result.content;
+        return truncated;
       }
 
       // 失败 → 结构化错误，引导 LLM 恢复
@@ -307,7 +344,14 @@ export class Agent {
     const systemMsg = this.messages[0];
     const rounds = splitRounds(this.messages);
 
-    if (rounds.length <= 1) return;
+    if (rounds.length <= 1) {
+      // 只有 1 轮但已严重超标（> 95%）→ 硬截断该轮工具结果
+      if (estimated > limit * 0.95) {
+        this.messages = [systemMsg, ...this.hardTrimSingleRound(rounds[0])];
+        this.logger.logSystem(`单轮超标: ${estimated} tokens/${limit} → 硬截断工具结果`);
+      }
+      return;
+    }
 
     let keepCount = Math.min(KEEP_ROUNDS, rounds.length - 1);
     this.logger.logSystem(
@@ -317,23 +361,29 @@ export class Agent {
     // 尝试 LLM 摘要：失败则回退到简单截断
     const { summary, success } = await this.trySummarize(rounds, keepCount);
     if (!success) {
-      // 摘要失败 → 直接截断到保留轮次
-      const keepRounds = rounds.slice(-keepCount);
-      this.messages = [systemMsg, ...keepRounds.flat()];
+      // 摘要失败 → 直接截断到保留轮次（修复配对）
+      this.messages = [systemMsg, ...this.fixToolCallPairs(rounds.slice(-keepCount).flat())];
       this.logger.logSystem(`摘要失败，回退到简单截断: 保留 ${keepCount} 轮`);
       return;
     }
 
-    // 重建消息：system + 摘要 + 保留轮次
-    const keepRounds = rounds.slice(-keepCount);
+    // 摘要太短视为失败
+    if (summary.length < 20) {
+      this.logger.logSystem(`摘要质量不足 (${summary.length} 字符)，回退到简单截断`);
+      this.messages = [systemMsg, ...this.fixToolCallPairs(rounds.slice(-keepCount).flat())];
+      return;
+    }
+
+    // 重建消息：system + 摘要 + 保留轮次（修复配对：摘要可能截掉前轮的 tool_calls）
+    const keepMessages = this.fixToolCallPairs(rounds.slice(-keepCount).flat());
     this.messages = [
       systemMsg,
       { role: "user", content: `[对话历史摘要]\n${summary}` },
       { role: "assistant", content: "已了解对话背景。" },
-      ...keepRounds.flat(),
+      ...keepMessages,
     ];
 
-    const newEstimated = estimateTokens(this.messages);
+    let newEstimated = estimateTokens(this.messages);
     this.logger.logSystem(
       `上下文已压缩: ${rounds.length} 轮 → 保留 ${keepCount} 轮 + 摘要 (${summary.length} 字符)` +
         ` | 估算 ${estimated}→${newEstimated} tokens`,
@@ -342,15 +392,16 @@ export class Agent {
     // 压缩后验证：仍超标则减少保留轮次
     while (newEstimated >= limit * THRESHOLD && keepCount > 1) {
       keepCount--;
-      const tighterKeep = rounds.slice(-keepCount);
+      const tighterKeep = this.fixToolCallPairs(rounds.slice(-keepCount).flat());
       this.messages = [
         systemMsg,
         { role: "user", content: `[对话历史摘要]\n${summary}` },
         { role: "assistant", content: "已了解对话背景。" },
-        ...tighterKeep.flat(),
+        ...tighterKeep,
       ];
+      newEstimated = estimateTokens(this.messages);
       this.logger.logSystem(
-        `压缩后仍超标，减少保留轮次: ${keepCount + 1} → ${keepCount} | 估算 ${estimateTokens(this.messages)} tokens`,
+        `压缩后仍超标，减少保留轮次: 保留 ${keepCount} 轮 | 估算 ${newEstimated} tokens`,
       );
     }
 
@@ -359,11 +410,105 @@ export class Agent {
       const lastRound = rounds[rounds.length - 1];
       const head = lastRound.slice(0, 5);
       const tail = lastRound.slice(-3);
-      this.messages = [systemMsg, ...head, ...tail];
+      // 合并后用 fixToolCallPairs 清理断裂的 tool_calls/tool_result 配对
+      const merged = this.fixToolCallPairs([...head, ...tail]);
+      this.messages = [systemMsg, ...merged];
       this.logger.logSystem(
-        `硬截断: 仍超标，暴击截断最后一轮 (${lastRound.length} → ${head.length + tail.length} 条消息)`,
+        `硬截断: 仍超标，暴击截断最后一轮 (${lastRound.length} → ${merged.length} 条消息)`,
       );
     }
+  }
+
+  /** Microcompact：零 API 调用清理旧轮次 tool_result（对齐 Claude Code） */
+  private microcompact(): void {
+    const rounds = splitRounds(this.messages);
+    if (rounds.length <= KEEP_ROUNDS) return;
+
+    // 保护最近 KEEP_ROUNDS 轮不动，更早的轮次做占位符替换
+    const oldRounds = rounds.slice(0, rounds.length - KEEP_ROUNDS);
+    const before = estimateTokens(this.messages);
+    let compacted = 0;
+    for (const round of oldRounds) {
+      for (const msg of round) {
+        if (msg.role === "tool" && typeof msg.content === "string" && msg.content !== TOOL_RESULT_PLACEHOLDER) {
+          msg.content = TOOL_RESULT_PLACEHOLDER;
+          compacted++;
+        }
+      }
+    }
+
+    if (compacted > 0) {
+      this.logger.logSystem(
+        `Microcompact: ${compacted} 条旧 tool_result → 占位符 | 估算节省 ~${before - estimateTokens(this.messages)} tokens`,
+      );
+    }
+  }
+
+  /** 修复 tool_calls/tool_result 配对：移除孤立的 tool_calls 或 tool 消息（O(N) 实现） */
+  private fixToolCallPairs(messages: Message[]): Message[] {
+    // 一次扫描建立两个 Set，避免 O(N²)
+    const toolCallIds = new Set<string>(); // assistant 声明过的所有 tool_call id
+    const toolResultIds = new Set<string>(); // tool 消息已应答的所有 tool_call id
+    for (const msg of messages) {
+      if ((msg as any).tool_calls) {
+        for (const tc of (msg as any).tool_calls) toolCallIds.add(tc.id);
+      } else if (msg.role === "tool" && (msg as any).tool_call_id) {
+        toolResultIds.add((msg as any).tool_call_id);
+      }
+    }
+
+    const result: Message[] = [];
+    for (const msg of messages) {
+      // 孤立 tool_calls：任一 id 缺少对应 tool 应答 → 整条移除
+      if ((msg as any).tool_calls) {
+        const ids: string[] = (msg as any).tool_calls.map((tc: any) => tc.id);
+        const missing = ids.filter((id) => !toolResultIds.has(id));
+        if (missing.length > 0) {
+          this.logger.logSystem(`compressHistory: 移除断裂 tool_calls (缺少 tool: ${missing.join(", ")})`);
+          continue;
+        }
+      }
+
+      // 孤立 tool：tool_call_id 没对应的 tool_calls 声明 → 移除
+      if (msg.role === "tool") {
+        const id = (msg as any).tool_call_id;
+        if (id && !toolCallIds.has(id)) {
+          this.logger.logSystem(`compressHistory: 移除孤立 tool 消息 (${id})`);
+          continue;
+        }
+      }
+
+      result.push(msg);
+    }
+    return result;
+  }
+
+  /** 单轮超标时硬截断：将旧 tool_result 替换为占位符（保留最近 N 条 tool 完整内容） */
+  private hardTrimSingleRound(round: Message[]): Message[] {
+    const KEEP_RECENT_TOOLS = 3; // 至少保留最近 3 条 tool 内容，让 LLM 还能基于工具结果推理
+
+    // 截断边界：定位到最后一条非 tool_calls 的 assistant 文本回复
+    let boundary = -1;
+    for (let i = round.length - 1; i >= 0; i--) {
+      if (round[i].role === "assistant" && !(round[i] as any).tool_calls) {
+        boundary = i;
+        break;
+      }
+    }
+
+    // Fallback：没找到最终文本（轮次还在循环中）→ 用"最近 N 条 tool"作为保护边界
+    if (boundary === -1) {
+      const toolIndices = round.map((m, i) => (m.role === "tool" ? i : -1)).filter((i) => i >= 0);
+      // 保护最近 N 条 tool；若不足 N 条则全保留（不动作）
+      if (toolIndices.length <= KEEP_RECENT_TOOLS) return round;
+      boundary = toolIndices[toolIndices.length - KEEP_RECENT_TOOLS];
+    }
+
+    return round.map((msg, i) =>
+      msg.role === "tool" && i < boundary && msg.content !== TOOL_RESULT_PLACEHOLDER
+        ? { ...msg, content: TOOL_RESULT_PLACEHOLDER }
+        : msg,
+    );
   }
 
   /** 尝试生成对话摘要。返回 { summary, success }，失败时 success=false */
