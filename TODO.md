@@ -25,6 +25,7 @@
 - [x] **低轮次压缩修复**：不足 5 轮时允许压缩（保留至少 1 轮），避免早期超大上下文撑爆
 - [x] **Web 内容获取**：fetch_url 工具，HTTP GET → HTML 提取纯文本，5s 超时，1MB 上限
 - [x] **工具结果预算管理**：middle truncation 硬截断（256 行 / 10KiB）+ Microcompact 旧 tool_result → `[Old tool result content cleared]` 占位符，对齐 Claude Code/Codex，零 API 调用
+- [x] **Plan 模式**：Agent 自主探索 → 步骤拆解 → 终端确认 → 逐步执行，失败自动重试/skip，`.mini-agent/plans/` 持久化，三层架构分离（REPL→Plan→Agent）
 
 
 ---
@@ -33,12 +34,7 @@
 
 > 按学习价值 + 依赖关系排列。Agent 架构核心概念优先。
 
-### Plan 模式
-*依赖「Token 计数」「上下文窗口管理」*
-
-- 复杂任务生成 numbered checklist，保存 `.mini-agent/plans/`
-- 终端进度显示，失败自主重试/跳过/修改
-- `/plan status` `/plan cancel`
+### 子 Agent 委托
 
 ### 子 Agent 委托
 *依赖「上下文窗口管理」「Plan 模式」*

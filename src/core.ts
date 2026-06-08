@@ -147,6 +147,16 @@ export class Agent {
 
   /** 处理一次用户输入，返回最终回复 */
   async chat(userInput: string): Promise<string> {
+    return this.doChat(userInput, this.onToken);
+  }
+
+  /** 静默对话：不流式输出 LLM 文本，但保留工具进度（⏳/✓），用于 Plan Research 等后台分析场景 */
+  async chatQuiet(userInput: string): Promise<string> {
+    return this.doChat(userInput, undefined);
+  }
+
+  /** 内部统一的对话实现 */
+  private async doChat(userInput: string, onToken?: (token: string) => void): Promise<string> {
     // 1. Microcompact：每轮零成本清理旧轮次 tool_result（对齐 Claude Code）
     this.microcompact();
 
@@ -163,7 +173,7 @@ export class Agent {
         messages: this.messages,
         tools: this.toolSchemas,
         logger: this.logger,
-        onToken: this.onToken,
+        onToken,
       });
 
       // 累计 token
