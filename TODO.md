@@ -31,43 +31,7 @@
 
 ## 计划
 
-> 按依赖关系排列。被依赖的在前，依赖者在后。
-
-### 编辑预览
-*无强制依赖*
-
-- edit_file 执行前纯 JS 行对比，彩色终端展示 diff
-- 确认升级为 `[Y] 应用 [n] 取消 [v] 完整 diff`
-
-### search_content 提速
-*无强制依赖*
-
-- 检测系统有 rg 时切换 ripgrep（10~100x），无则 fallback 纯 JS
-- 工具名和参数对 LLM 透明
-
-### 项目规则配置
-*参考「上下文窗口管理」*
-
-- `.mini-agent/rules.md`，启动时注入 system prompt
-- /reset 自动重载，`/rules edit` 编辑
-
-### 框架检测
-*增量修改 context.ts*
-
-- package.json 依赖识别 react/vue/next/nuxt/express/django 等
-- 追加到 system prompt：`框架: React 18 + TypeScript + Vite`
-
-### 运行时模型切换
-*无强制依赖*
-
-- `/model <name>` 切换当前会话模型，不影响历史
-- 预设列表 `.mini-agent/models.json`，支持别名
-
-### diff/patch 编辑
-*依赖「编辑预览」*
-
-- 用 unified diff 替代字符串精确匹配
-- LLM 生成 patch → apply，行号偏移 ±5 容忍，失败回滚
+> 按学习价值 + 依赖关系排列。Agent 架构核心概念优先。
 
 ### Plan 模式
 *依赖「Token 计数」「上下文窗口管理」*
@@ -88,18 +52,54 @@
 - `.mini-agent/skills/` 下 skill 包定义工具 + prompt + 触发条件
 - 启动加载注册，`/skill list` `/skill reload`
 
-### 多模态输入
-*需模型支持 vision*
-
-- `read_image` 工具：本地图片 → base64 → image_url 消息
-- 超大图自动压缩到模型限制
-
 ### MCP 协议
 *无强制依赖（框架级）*
 
 - MCP client（stdio + HTTP），`.mini-agent/mcp.json` 配置
 - MCP 工具和内置工具统一注册表
 - Web 搜索：通过接入 Brave/Tavily Search MCP Server 实现，解决国内网络限制
+
+### 编辑预览
+*无强制依赖*
+
+- edit_file 执行前纯 JS 行对比，彩色终端展示 diff
+- 确认升级为 `[Y] 应用 [n] 取消 [v] 完整 diff`
+
+### diff/patch 编辑
+*依赖「编辑预览」*
+
+- 用 unified diff 替代字符串精确匹配
+- LLM 生成 patch → apply，行号偏移 ±5 容忍，失败回滚
+
+### search_content 提速
+*无强制依赖*
+
+- 检测系统有 rg 时切换 ripgrep（10~100x），无则 fallback 纯 JS
+- 工具名和参数对 LLM 透明
+
+### 运行时模型切换
+*无强制依赖*
+
+- `/model <name>` 切换当前会话模型，不影响历史
+- 预设列表 `.mini-agent/models.json`，支持别名
+
+### 项目规则配置
+*参考「上下文窗口管理」*
+
+- `.mini-agent/rules.md`，启动时注入 system prompt
+- /reset 自动重载，`/rules edit` 编辑
+
+### 框架检测
+*增量修改 context.ts*
+
+- package.json 依赖识别 react/vue/next/nuxt/express/django 等
+- 追加到 system prompt：`框架: React 18 + TypeScript + Vite`
+
+### 多模态输入
+*需模型支持 vision*
+
+- `read_image` 工具：本地图片 → base64 → image_url 消息
+- 超大图自动压缩到模型限制
 
 ### Web UI
 *依赖前面所有（最后一步）*
