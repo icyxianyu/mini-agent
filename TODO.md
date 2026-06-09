@@ -26,6 +26,7 @@
 - [x] **Web 内容获取**：fetch_url 工具，HTTP GET → HTML 提取纯文本，5s 超时，1MB 上限
 - [x] **工具结果预算管理**：middle truncation 硬截断（256 行 / 10KiB）+ Microcompact 旧 tool_result → `[Old tool result content cleared]` 占位符，对齐 Claude Code/Codex，零 API 调用
 - [x] **Plan 模式**：Agent 自主探索 → 步骤拆解 → 终端确认 → 逐步执行，失败自动重试/skip，`.mini-agent/plans/` 持久化，三层架构分离（REPL→Plan→Agent）
+- [x] **search_content 提速**：优先 ripgrep（10~100x），不可用则 fallback 纯 JS，execFileSync 非 shell 传参，工具参数对 LLM 透明
 
 
 ---
@@ -33,8 +34,6 @@
 ## 计划
 
 > 按学习价值 + 依赖关系排列。Agent 架构核心概念优先。
-
-### 子 Agent 委托
 
 ### 子 Agent 委托
 *依赖「上下文窗口管理」「Plan 模式」*
@@ -66,12 +65,6 @@
 
 - 用 unified diff 替代字符串精确匹配
 - LLM 生成 patch → apply，行号偏移 ±5 容忍，失败回滚
-
-### search_content 提速
-*无强制依赖*
-
-- 检测系统有 rg 时切换 ripgrep（10~100x），无则 fallback 纯 JS
-- 工具名和参数对 LLM 透明
 
 ### 运行时模型切换
 *无强制依赖*
