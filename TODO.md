@@ -11,35 +11,39 @@
 - [x] 并行执行：Promise.all，1.6~3x 加速
 - [x] 上下文注入：9 种项目类型检测，配置/入口/Git/README 自动收集
 - [x] 安全机制：路径防越界 + 工具风险分级确认（Y/n/a/s）
-- [x] Shell 安全分级：`rm -rf`/`git push --force`/`sudo`/`chmod 777` 危险检测，⚠️ 警告，模式列表可 .env 配置
-- [x] 网络重试：5xx/timeout/429 自动重试 3 次，指数退避；4xx 不重试，流式+非流式都覆盖
-- [x] 错误恢复：分类提示（ENOENT/EACCES/TIMEOUT）+ parse error 重试
-- [x] 会话管理：workspace 隔离 + 多会话 + list/load/new/delete 命令
-- [x] 流式进度：工具调用时终端显示 ⏳ 执行状态，完成后追加 ✓/✗，不打断后续流式输出
+- [x] Shell 安全分级：危险检测，模式列表可 .env 配置
+- [x] 网络重试：5xx/timeout/429 重试 3 次指数退避；4xx 不重试
+- [x] 错误恢复：分类提示 + parse error 重试
+- [x] 会话管理：workspace 隔离 + 多会话 + list/load/new/delete
+- [x] 流式进度：工具调用终端显示 ⏳ 执行状态，完成后追加 ✓/✗
 
 ## 已完成 扩展功能
-- [x] **Token 计数**：API usage 提取 + 终端展示 + 累计统计（非流式从 `response.usage` 读，流式最后 chunk 获取）
-- [x] **大文件分段**：read_file 默认上限 200 行（可配置），超出展示总行数 + offset 翻页提示，对 LLM 透明
-- [x] **上下文窗口管理**：每轮估算 token，超模型上限 80% 时 LLM 自摘要旧轮次，保留 system + 最近 5 轮
-- [x] **精确 Token 计数**：用 gpt-tokenizer 的 encodeChat 替代字符数/4 估算，偏差从 -26% 降到 0%
-- [x] **低轮次压缩修复**：不足 5 轮时允许压缩（保留至少 1 轮），避免早期超大上下文撑爆
-- [x] **Web 内容获取**：fetch_url 工具，HTTP GET → HTML 提取纯文本，5s 超时，1MB 上限
-- [x] **工具结果预算管理**：middle truncation 硬截断（256 行 / 10KiB）+ Microcompact 旧 tool_result → `[Old tool result content cleared]` 占位符，对齐 Claude Code/Codex，零 API 调用
-- [x] **Plan 模式**：Agent 自主探索 → 步骤拆解 → 终端确认 → 逐步执行，失败自动重试/skip，`.mini-agent/plans/` 持久化，三层架构分离（REPL→Plan→Agent）
-- [x] **search_content 提速**：优先 ripgrep（10~100x），不可用则 fallback 纯 JS，execFileSync 非 shell 传参，工具参数对 LLM 透明
 
+- [x] **Token 计数 + 精确计数**：gpt-tokenizer encodeChat，终端展示上下文占用 vs 窗口上限
+- [x] **大文件分段**：read_file 默认上限 200 行，超出提示翻页
+- [x] **上下文窗口管理**：超 80% 触发 LLM 自摘要压缩，保留 system + 最近 5 轮
+- [x] **Web 内容获取**：fetch_url 工具，HTML → 纯文本
+- [x] **工具结果预算管理**：middle truncation + Microcompact
+- [x] **Plan 模式**：探索 → 步骤拆解 → 确认 → 执行，dependsOn 依赖分析 + 并行执行
+- [x] **search_content 提速**：优先 ripgrep，fallback 纯 JS
+- [x] **子 Agent 委托 (Tool-as-Agent)**：task 工具封装子 Agent，LLM 自主 spawn，独立 messages + 工具集，3 个内置 Agent（general-purpose/explore/plan），继承/独立两条路径，并行执行，危险命令拦截，结果结构化回传
+- [x] **全局 CLI**：`mini-agent` 命令，`pnpm link --global` 安装，`--workspace` / `--model` 参数，自动加载 .env，REPL + 单次执行
+- [x] **终端优化**：readline pause/resume、resize 处理、子 Agent 静默、完成标记
 
 ---
 
 ## 计划
 
-> 按学习价值 + 依赖关系排列。Agent 架构核心概念优先。
+> 按学习价值 + 依赖关系排列。
 
-### 子 Agent 委托
-*依赖「上下文窗口管理」「Plan 模式」*
+### 动态工具挂载
+*无强制依赖*
 
-- 主 Agent 拆分 → 并行分配子 Agent，独立 messages + 工具
-- 共享工作区，子任务失败不阻塞
+- 根据对话阶段/复杂度动态决定给 LLM 暴露哪些工具
+- 简单对话: 不挂工具（节省 token）
+- 代码阅读: 只挂 read_file / list_directory / search_content / fetch_url
+- 代码修改: 追加 write_file / edit_file / create_directory / execute_command
+- 复杂任务: 追加 task（子 Agent 委托能力）
 
 ### Skill 系统
 *无强制依赖（框架级）*
@@ -52,43 +56,36 @@
 
 - MCP client（stdio + HTTP），`.mini-agent/mcp.json` 配置
 - MCP 工具和内置工具统一注册表
-- Web 搜索：通过接入 Brave/Tavily Search MCP Server 实现，解决国内网络限制
 
 ### 编辑预览
 *无强制依赖*
 
 - edit_file 执行前纯 JS 行对比，彩色终端展示 diff
-- 确认升级为 `[Y] 应用 [n] 取消 [v] 完整 diff`
 
 ### diff/patch 编辑
 *依赖「编辑预览」*
 
-- 用 unified diff 替代字符串精确匹配
-- LLM 生成 patch → apply，行号偏移 ±5 容忍，失败回滚
+- unified diff 替代字符串精确匹配，行号偏移 ±5 容忍
 
 ### 运行时模型切换
 *无强制依赖*
 
-- `/model <name>` 切换当前会话模型，不影响历史
-- 预设列表 `.mini-agent/models.json`，支持别名
+- `/model <name>` 切换模型，预设列表 `.mini-agent/models.json`
 
 ### 项目规则配置
 *参考「上下文窗口管理」*
 
 - `.mini-agent/rules.md`，启动时注入 system prompt
-- /reset 自动重载，`/rules edit` 编辑
 
 ### 框架检测
 *增量修改 context.ts*
 
-- package.json 依赖识别 react/vue/next/nuxt/express/django 等
-- 追加到 system prompt：`框架: React 18 + TypeScript + Vite`
+- package.json 依赖识别框架，追加到 system prompt
 
 ### 多模态输入
 *需模型支持 vision*
 
-- `read_image` 工具：本地图片 → base64 → image_url 消息
-- 超大图自动压缩到模型限制
+- `read_image` 工具：本地图片 → base64
 
 ### Web UI
 *依赖前面所有（最后一步）*

@@ -181,6 +181,53 @@ LLM 看到"返回了 200 行 + 剩余提示"后，自然学会了精确传 offse
 
 ---
 
+## 9. 子 Agent 委托系统设计 — Tool-as-Agent 模式
+
+**发现时间：** 2026-06-10
+
+**背景：** 需要实现子 Agent 委托，让 LLM 能自主决定何时 spawn 子 Agent 处理复杂任务。
+
+**设计方案调研：**
+- **Claude Code**：Task 工具 + 6 个内置 Agent，Fork 路径共享父 Prompt Cache，Coordinator 模式编排
+- **Codex CLI**：单会话多任务并行，无原生子 Agent
+- **OpenClaw**：基于渠道的静态路由，非运行时委托
+- **GitHub Copilot**：Plan Agent + Git Worktree 隔离执行
+
+**实现方案：** 采用 Tool-as-Agent 模式：
+1. 子 Agent 封装为 `task` 工具，LLM 通过 Function Calling 自主决策
+2. 两条委托路径：继承（共享父 Prompt+工具池）、独立（自己的 Prompt+受限工具）
+3. 3 个内置 Agent：general-purpose / explore / plan
+4. `Agent.forked()` 静态工厂创建独立实例
+5. 结果结构化回传：status + output + filesModified + toolRounds
+
+**架构层次：**
+```
+TaskTool → SubAgentRunner → Agent.forked() → 子 Agent Loop
+```
+
+**关键设计决策：**
+- 上下文隔离：子 Agent 独立 messages，不污染主 Agent
+- 不传父 context：防止过期数据 + System Prompt 重复注入
+- verbose=false：子 Agent 工具进度不刷终端
+- 禁止递归 task：子 Agent 工具集不含 task 工具
+- 危险命令拦截：子 Agent 的 sudo/rm -rf 等直接抛错
+- Plan Agent 结果美化：按 dependsOn 拓扑分批渲染
+
+**发现并修复的问题：**
+1. 每个子 Agent 实例创建 4 次（createAgent 被重复调用 + forked 内部双重 reset）
+2. System Prompt 中上下文重复注入 2~3 次
+3. 子 Agent 的 sudo 命令未拦截
+4. 子 Agent 拿主 Agent 启动时的过期上下文
+5. 终端输出信息量失控（verbose 控制双向调整）
+6. readline 与流式输出重叠 + resize 丢行
+
+**最终效果：**
+- LLM 能自主通过 task 工具触发 plan + 并行多子 Agent
+- 实测：WebRTC 项目从规划到完整代码生成，11 步骤计划 + 6 对并行子 Agent，耗时 5:50
+- 终端输出干净：子 Agent 静默 + 完成摘要 + 明确结束标记
+
+---
+
 ## 8. tool_call_id 缺失导致 API 400 错误
 
 **发现时间：** 2026-06-07
@@ -195,3 +242,42 @@ LLM 看到"返回了 200 行 + 剩余提示"后，自然学会了精确传 offse
 3. 兜底：遍历 `response.toolCalls`，未拿到结果的补 `❌ 工具 xxx 执行中断` 占位
 
 **验证：** 改 `MODEL_CONTEXT_LIMIT=28000` 测试压缩，对话中出现 113%→57% 的上下文缩减，compressHistory 生效确认。
+
+---
+
+## 10. Plan 模式升级 — dependsOn 并行执行
+
+**发现时间：** 2026-06-10
+
+**需求：** 规划 Agent 输出的步骤自然有依赖关系，无依赖的步骤应该并行执行。
+
+**方案：**
+1. `PlanStep` 新增 `dependsOn: number[]` 字段
+2. `executeStepsParallel()` 按依赖拓扑分批：每批次内步骤 `Promise.all` 并发
+3. `buildDependencyBatches()` 贪心算法构建批次
+4. `generateSteps` 的 Prompt 升级为输出带 dependsOn 的 JSON
+
+**关键：** dependsOn 信息只在 PlanAgent → PlanManager 路径中被 `buildDependencyBatches` 消费。LLM 自主调用 task(plan) 路径时，dependsOn 只是文本提示，不影响并行调度（由 LLM 自己推理分批）。
+
+---
+
+## 11. 全局 CLI + 终端输出优化
+
+**发现时间：** 2026-06-10
+
+**需求：** 项目只能在源码目录通过 pnpm dev 启动，无法作为全局命令在其他目录使用。
+
+**方案：**
+- `bin/mini-agent.ts`：Global CLI 入口（env 加载 → 转发 src/index.ts）
+- `package.json` 加 `bin` 字段，`pnpm link --global` 安装
+- 支持 `--workspace` / `--model` 参数
+- 工作区 `.env` 优先，项目 `.env` 兜底
+
+**终端优化：**
+- `rl.pause()` / `rl.resume()`：释放终端给流式输出
+- `process.stdout.on("resize")`：处理终端 resize 防丢行
+- `verbose=false`：子 Agent 静默，不刷 ⏳/✓
+- `printSummary`：子 Agent 完成时输出一行摘要（📋 计划名 — N步骤 [X轮]）
+- `✅ 完成` 标记：每次回复后明确显示结束
+
+**踩坑：** `Config` 对象在 import 时静态捕获 `process.env`，所以 bin 入口必须先 `loadEnv` 再 `await import("../src/config.js")`，否则 API Key 永远是空字符串。

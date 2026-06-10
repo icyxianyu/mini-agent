@@ -45,6 +45,8 @@ export interface PlanStep {
   error?: string;
   /** 重试次数 */
   retries: number;
+  /** 依赖的步骤 ID 列表（这些步骤完成后才能开始当前步骤） */
+  dependsOn: number[];
 }
 
 export interface Plan {
@@ -144,7 +146,7 @@ export class PlanManager {
   }
 
   /** 设置 LLM 生成的标题和步骤（research → review） */
-  setPlan(title: string, steps: Omit<PlanStep, "status" | "retries" | "result" | "error">[]): void {
+  setPlan(title: string, steps: Array<{ id: number; description: string; dependsOn?: number[] }>): void {
     if (!this.plan) throw new Error("没有活跃的 Plan");
     validateTransition(this.plan.status, "review", validPlanTransitions, "Plan");
 
@@ -152,6 +154,7 @@ export class PlanManager {
     this.plan.status = "review";
     this.plan.steps = steps.map((s) => ({
       ...s,
+      dependsOn: s.dependsOn ?? [],
       status: "pending" as StepStatus,
       retries: 0,
     }));
@@ -199,15 +202,22 @@ ${this.plan.request}
 {
   "title": "计划标题（15字以内）",
   "steps": [
-    "步骤1：具体操作，指明文件或模块路径",
-    "步骤2：...",
-    "..."
+    {
+      "description": "步骤1：具体操作，指明文件或模块路径",
+      "dependsOn": []
+    },
+    {
+      "description": "步骤2：依赖步骤1完成后才能执行的操作",
+      "dependsOn": [1]
+    }
   ]
 }
 
 ## 规则
-- 步骤按依赖顺序排列，3~8 个
+- 步骤 3~8 个
 - 每个步骤是一条具体的操作指令（如"创建 src/Cache.ts，实现 LRU 缓存类"）
+- dependsOn 指定依赖的步骤 ID 列表，无依赖则为空数组 []
+- 可以并行执行的步骤不要设置依赖关系
 - 涉及已有代码时指明具体文件路径`;
 
     logger.logSystem("Agent 正在探索项目并生成 Plan 步骤...");
@@ -224,14 +234,14 @@ ${this.plan.request}
   }
 
   /** 解析 LLM 返回的 JSON 计划 */
-  private parsePlanResponse(text: string): { title: string; steps: { id: number; description: string }[] } {
+  private parsePlanResponse(text: string): { title: string; steps: { id: number; description: string; dependsOn?: number[] }[] } {
     // 去除 markdown 代码块包裹
     let jsonStr = text.trim();
     const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (fenceMatch) jsonStr = fenceMatch[1].trim();
 
     // 尝试直接解析
-    let parsed: { title?: string; steps?: string[] } = {};
+    let parsed: { title?: string; steps?: (string | { description: string; dependsOn?: number[] })[] } = {};
     try {
       parsed = JSON.parse(jsonStr);
     } catch {
@@ -243,8 +253,26 @@ ${this.plan.request}
     }
 
     const title = parsed.title ?? "计划";
-    const steps = (parsed.steps ?? []).filter((s) => typeof s === "string" && s.trim())
-      .map((s, i) => ({ id: i + 1, description: s.trim() }));
+    const rawSteps = parsed.steps ?? [];
+
+    // 兼容两种格式：字符串数组 或 对象数组（含 dependsOn）
+    const steps: { id: number; description: string; dependsOn?: number[] }[] = [];
+    for (let i = 0; i < rawSteps.length; i++) {
+      const s = rawSteps[i];
+      if (typeof s === "string") {
+        if (s.trim()) steps.push({ id: i + 1, description: s.trim() });
+      } else if (s && typeof s === "object" && s.description) {
+        const item: { id: number; description: string; dependsOn?: number[] } = {
+          id: i + 1,
+          description: s.description.trim(),
+        };
+        if (Array.isArray(s.dependsOn)) {
+          item.dependsOn = s.dependsOn;
+        }
+        steps.push(item);
+      }
+    }
+
     return { title, steps };
   }
 
@@ -478,5 +506,133 @@ ${this.plan.request}
     }
 
     return this.plan?.status === "completed";
+  }
+
+  /**
+   * 并行执行所有 Plan 步骤（根据 dependsOn 依赖关系分批并发）。
+   * 
+   * 与 executeSteps（严格顺序）不同，此方法将无依赖的步骤放入同一批次并行执行。
+   * 每批次内步骤并发运行，批次之间按依赖串行等待。
+   * 
+   * @param parallelAgent - 支持并行调用的 Agent 接口
+   * @param onProgress - 每批次完成后的进度回调
+   * @returns true=全部完成, false=中途取消/失败
+   */
+  async executeStepsParallel(
+    parallelAgent: PlanAgent,
+    onProgress: (plan: Plan) => void,
+  ): Promise<boolean> {
+    if (!this.plan || !this.isExecuting) return false;
+
+    const maxRetries = 3;
+
+    // 分批：将所有步骤按依赖关系分组
+    const batches = this.buildDependencyBatches();
+    for (const batch of batches) {
+      // 设置批次内所有步骤为 in_progress
+      for (const step of batch) {
+        step.status = "in_progress";
+      }
+      onProgress(this.plan);
+      this.save();
+
+      // 并行执行批次内所有步骤
+      const results = await Promise.allSettled(
+        batch.map((step) =>
+          this.executeSingleStep(parallelAgent, step, maxRetries),
+        ),
+      );
+
+      // 处理结果
+      for (let i = 0; i < batch.length; i++) {
+        const step = batch[i];
+        const settled = results[i];
+        if (settled.status === "fulfilled") {
+          if (settled.value.success) {
+            step.result = settled.value.output;
+            step.status = "completed";
+          } else {
+            step.error = settled.value.error;
+            step.status = "failed";
+            step.retries = maxRetries; // 重试已耗尽
+            // 自动跳过失败的步骤（避免阻塞后续批次）
+            this.skipStep(step.id);
+          }
+        } else {
+          step.error = settled.reason?.message ?? "未知并行错误";
+          step.status = "failed";
+          step.retries = maxRetries;
+          this.skipStep(step.id);
+        }
+      }
+
+      this.save();
+      onProgress(this.plan);
+
+      if (this.plan?.status === "cancelled") return false;
+    }
+
+    // 所有批次完成
+    this.plan!.status = "completed";
+    this.plan!.completedAt = new Date().toISOString();
+    this.plan!.currentStep = -1;
+    this.save();
+    return true;
+  }
+
+  /** 构建依赖批次：将无依赖关系的步骤放入同一批次 */
+  private buildDependencyBatches(): PlanStep[][] {
+    if (!this.plan) return [];
+
+    const steps = this.plan.steps;
+    const completed = new Set<number>();
+    const batches: PlanStep[][] = [];
+
+    while (completed.size < steps.length) {
+      const batch: PlanStep[] = [];
+
+      for (const step of steps) {
+        if (completed.has(step.id)) continue;
+        // 所有依赖已完成则可加入当前批次
+        const depsDone = step.dependsOn.every((depId) => completed.has(depId));
+        if (depsDone) {
+          batch.push(step);
+        }
+      }
+
+      if (batch.length === 0) {
+        // 循环依赖或逻辑错误：把剩余全部加入最后批次
+        for (const step of steps) {
+          if (!completed.has(step.id)) batch.push(step);
+        }
+      }
+
+      for (const s of batch) completed.add(s.id);
+      batches.push(batch);
+    }
+
+    return batches;
+  }
+
+  /** 执行单个步骤（含重试逻辑），返回 {success, output, error} */
+  private async executeSingleStep(
+    agent: PlanAgent,
+    step: PlanStep,
+    maxRetries: number,
+  ): Promise<{ success: boolean; output?: string; error?: string }> {
+    let lastError: string | undefined;
+    const stepPrompt = `请执行计划步骤 ${step.id}/${this.plan?.steps.length ?? "?"}:\n\n${step.description}\n\n完成后请简要说明执行结果。`;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const reply = await agent.chat(stepPrompt);
+        return { success: true, output: reply };
+      } catch (e: any) {
+        lastError = e.message ?? String(e);
+        if (attempt >= maxRetries) break;
+      }
+    }
+
+    return { success: false, error: lastError };
   }
 }

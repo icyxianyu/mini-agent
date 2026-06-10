@@ -37,6 +37,7 @@ import type { Logger } from "./logger.js";
 import type { ProjectContext } from "./context.js";
 
 export type Message = OpenAI.Chat.Completions.ChatCompletionMessageParam;
+export type AgentToolSchemas = OpenAI.Chat.Completions.ChatCompletionTool;
 
 const THRESHOLD = 0.8; // 超 80% 触发裁剪
 const KEEP_ROUNDS = 5; // 保留最近 N 轮
@@ -110,12 +111,30 @@ function splitRounds(messages: Message[]): Message[][] {
   return rounds;
 }
 
+export interface ForkedAgentOptions {
+  logger: Logger;
+  onToken?: (text: string) => void;
+  context?: ProjectContext;
+  askConfirm?: (name: string, args: Record<string, unknown>, risk: string) => Promise<boolean>;
+  /** 自定义 System Prompt（覆盖 Config.systemPrompt） */
+  systemPrompt?: string;
+  /** 自定义工具 Schema（覆盖默认全部工具） */
+  toolSchemas?: AgentToolSchemas[];
+  /** 自定义最大轮次（覆盖 Config.maxToolRounds） */
+  maxToolRounds?: number;
+  /** 是否输出工具进度到终端（子 Agent 设 false） */
+  verbose?: boolean;
+}
+
 export class Agent {
   /** 对话历史 */
   private messages: Message[] = [];
 
   /** 工具 schema（传给 LLM） */
-  private readonly toolSchemas = getAllToolSchemas();
+  private toolSchemas = getAllToolSchemas();
+
+  /** 是否输出工具进度到终端 */
+  private verbose = true;
 
   /** 日志记录器 */
   private readonly logger: Logger;
@@ -132,6 +151,15 @@ export class Agent {
   /** 工具确认回调（返回 true=允许, false=拒绝） */
   private readonly askConfirm?: (name: string, args: Record<string, unknown>, risk: string) => Promise<boolean>;
 
+  /** 当前对话的工具调用轮数（仅最近一次 chat 的轮数） */
+  private roundCount = 0;
+
+  /** 自定义 System Prompt（用于 forked Agent） */
+  private customSystemPrompt?: string;
+
+  /** 自定义最大轮次 */
+  private customMaxRounds?: number;
+
   constructor(
     logger: Logger,
     onToken?: (text: string) => void,
@@ -143,6 +171,35 @@ export class Agent {
     this.context = context ?? null;
     this.askConfirm = askConfirm;
     this.reset();
+  }
+
+  /**
+   * 创建 Forked Agent（用于子 Agent 委托）。
+   * 与主 Agent 共享日志器但拥有完全独立的 messages 历史和可选的定制配置。
+   */
+  static forked(options: ForkedAgentOptions): Agent {
+    // 子 Agent 不共享父 Agent 的 context：
+    // - 继承路径：父 systemPrompt 已含上下文，避免重复注入
+    // - 独立路径：使用自己的 systemPrompt，不需要父上下文
+    // - 且父上下文是启动时的过期快照
+    const agent = new Agent(
+      options.logger,
+      options.onToken,
+      undefined, // 不传 context，防止重复注入 + 过期数据
+      options.askConfirm,
+    );
+    agent.verbose = options.verbose ?? false;
+    if (options.systemPrompt) {
+      agent.customSystemPrompt = options.systemPrompt;
+      agent.reset(); // 用新的 systemPrompt 重建
+    }
+    if (options.toolSchemas) {
+      agent.toolSchemas = options.toolSchemas;
+    }
+    if (options.maxToolRounds) {
+      agent.customMaxRounds = options.maxToolRounds;
+    }
+    return agent;
   }
 
   /** 处理一次用户输入，返回最终回复 */
@@ -168,7 +225,10 @@ export class Agent {
     this.logger.logUserInput(userInput);
 
     // 3. Agent Loop：不断调用 LLM，直到它不再请求工具
-    for (let round = 0; round < Config.maxToolRounds; round++) {
+    const maxRounds = this.customMaxRounds ?? Config.maxToolRounds;
+    this.roundCount = 0;
+    for (let round = 0; round < maxRounds; round++) {
+      this.roundCount = round + 1;
       const response = await chatStream({
         messages: this.messages,
         tools: this.toolSchemas,
@@ -267,7 +327,7 @@ export class Agent {
     if (!tool) {
       const err = `❌ 未知工具: ${name}`;
       this.logger.logToolResult(false, err);
-      console.log(`  ✗ ${name}  未知工具  ${argsPreview}`);
+      if (this.verbose) console.log(`  ✗ ${name}  未知工具  ${argsPreview}`);
       return err;
     }
 
@@ -277,13 +337,13 @@ export class Agent {
       if (!approved) {
         const err = `🚫 用户拒绝了工具调用: ${name} —— 请换一种方式或跳过此步骤`;
         this.logger.logToolResult(false, err);
-        console.log(`  ✗ ${name}  已拒绝  ${argsPreview}`);
+        if (this.verbose) console.log(`  ✗ ${name}  已拒绝  ${argsPreview}`);
         return err;
       }
     }
 
     // 流式进度：显示执行状态
-    console.log(`  ⏳ ${name} ${argsPreview}`);
+    if (this.verbose) console.log(`  ⏳ ${name} ${argsPreview}`);
 
     try {
       const result = await tool.execute(args);
@@ -295,19 +355,19 @@ export class Agent {
           Config.toolResultMaxBytes,
         );
         this.logger.logToolResult(true, truncated);
-        console.log(`  ✓ ${name} ${argsPreview}`);
+        if (this.verbose) console.log(`  ✓ ${name} ${argsPreview}`);
         return truncated;
       }
 
       // 失败 → 结构化错误，引导 LLM 恢复
       const err = this.formatError(name, args, result.error ?? "未知错误");
       this.logger.logToolResult(false, err);
-      console.log(`  ✗ ${name}  失败  ${argsPreview}`);
+      if (this.verbose) console.log(`  ✗ ${name}  失败  ${argsPreview}`);
       return err;
     } catch (e: any) {
       const err = this.formatError(name, args, e.message);
       this.logger.logToolResult(false, err);
-      console.log(`  ✗ ${name}  异常  ${argsPreview}`);
+      if (this.verbose) console.log(`  ✗ ${name}  异常  ${argsPreview}`);
       return err;
     }
   }
@@ -621,11 +681,28 @@ export class Agent {
 
   /** 构建 system message */
   private buildSystemMessage(): Message {
-    let content = Config.systemPrompt;
+    const base = this.customSystemPrompt ?? Config.systemPrompt;
+    let content = base;
     if (Config.enableContextInjection && this.context) {
       content += `\n\n## 当前项目上下文\n${this.context.summary}\n\n当用户提出与当前项目相关的需求时，利用以上上下文信息来辅助决策。`;
     }
     return { role: "system", content };
+  }
+
+  /** 获取最近一次 chat 的工具调用轮数 */
+  getRoundCount(): number {
+    return this.roundCount;
+  }
+
+  /** 获取当前 System Prompt 的文本内容 */
+  getSystemPromptContent(): string {
+    const sysMsg = this.messages[0];
+    return typeof sysMsg?.content === "string" ? sysMsg.content : "";
+  }
+
+  /** 获取当前工具 Schema */
+  getToolSchemas(): AgentToolSchemas[] {
+    return this.toolSchemas;
   }
 
   /** 获取所有消息（供 SessionManager 持久化用） */

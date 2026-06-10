@@ -28,6 +28,9 @@ import { SearchContentTool } from "./search-tools.js";
 // Web 内容获取工具
 import { FetchUrlTool } from "./web-tools.js";
 
+// 子 Agent 委托工具
+import { TaskTool } from "./task-tool.js";
+
 /** 所有可用工具实例 */
 export const allTools: BaseTool[] = [
   // 文件操作
@@ -45,6 +48,8 @@ export const allTools: BaseTool[] = [
   new SearchContentTool(),
   // Web 内容获取
   new FetchUrlTool(),
+  // 子 Agent 委托
+  new TaskTool(),
 ];
 
 /** 根据名称查找工具 */

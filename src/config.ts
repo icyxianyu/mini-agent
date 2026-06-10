@@ -22,7 +22,7 @@ export const Config = {
   systemPrompt:
     process.env.SYSTEM_PROMPT ??
     [
-      "你是一个 AI 编程助手，拥有读写文件、执行终端命令、搜索代码的能力。",
+      "你是一个 AI 编程助手，拥有读写文件、执行终端命令、搜索代码、委托子Agent的能力。",
       "",
       "## 行为准则",
       "1. 上下文注入中已包含项目结构、配置文件和关键入口文件。先利用已有信息，不要重复获取。",
@@ -33,6 +33,7 @@ export const Config = {
       "3. 纯文本对话、命令执行（npm test 等）、创建文件时直接行动，不需要搜索。",
       "4. 每个工具的使用方式请参考工具自身的 description，工具描述中已包含最佳实践。",
       "5. workspace 内所有文件操作安全，越界会被拒绝。写/删文件需用户确认。",
+      "6. 🔧 子Agent委托：遇到复杂、多步骤的独立任务时，使用 task 工具启动子Agent。子Agent拥有独立上下文，适合代码探索、大规模重构等场景。多个独立子任务可并行调用多个 task。",
     ].join("\n"),
 
   /** 工作区根目录，所有文件操作限制在此目录内 */
@@ -63,6 +64,15 @@ export const Config = {
 
   /** 工具结果硬截断：最大字节数（超出做 middle truncation） */
   toolResultMaxBytes: Number(process.env.TOOL_RESULT_MAX_BYTES) || 10240, // 10 KiB
+
+  /** 子 Agent 最大工具调用轮数（默认 8） */
+  subAgentMaxRounds: Number(process.env.SUB_AGENT_MAX_ROUNDS) || 8,
+
+  /** 子 Agent 是否默认后台运行（不阻塞主 Agent 流式输出） */
+  subAgentBackground: (process.env.SUB_AGENT_BACKGROUND ?? "false") === "true",
+
+  /** Plan 模式是否默认使用并行执行 */
+  planParallel: (process.env.PLAN_PARALLEL ?? "true") === "true",
 
   /** 验证必需配置 */
   validate(): boolean {

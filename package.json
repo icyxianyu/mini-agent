@@ -4,6 +4,9 @@
   "description": "简易版 Claude Code — 学习 AI Agent 架构的项目",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "mini-agent": "./bin/mini-agent.ts"
+  },
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc",

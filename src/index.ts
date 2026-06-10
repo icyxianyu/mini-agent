@@ -22,6 +22,7 @@ import { collectProjectContext } from "./context.js";
 import { SessionManager } from "./session.js";
 import { PlanManager } from "./plan.js";
 import { checkDanger } from "./tools/shell-tools.js";
+import { taskToolState } from "./tools/task-tool.js";
 
 const BANNER = (logPath: string, sessionInfo: string, contextInfo?: string) => `
 ${chalk.cyan.bold("╔══════════════════════════════════════════╗")}
@@ -77,6 +78,12 @@ function ask(): Promise<string> {
     rl.question(chalk.blue("👤 你: "), (answer) => resolve(answer.trim()));
   });
 }
+
+// 处理终端 resize，防止 readline 错位
+process.stdout.on("resize", () => {
+  // 触发 readline 重新渲染当前行
+  (rl as any)._refreshLine?.();
+});
 
 async function main() {
   // 验证配置
@@ -167,6 +174,16 @@ async function main() {
     process.stdout.write(token);
   }, context ?? undefined, askConfirm);
 
+  // 初始化 TaskTool 共享状态（注入父 Agent 上下文供给）
+  taskToolState.logger = logger;
+
+  const updateTaskToolContext = () => {
+    taskToolState.parentContext = {
+      systemPrompt: agent.getSystemPromptContent(),
+      toolSchemas: agent.getToolSchemas(),
+    };
+  };
+
   const planMgr = new PlanManager();
 
   console.log(BANNER(logger.getFilePath(), sessionInfo, contextSummary));
@@ -174,8 +191,11 @@ async function main() {
   // 自动保存（每轮后）
   const autoSave = () => sessionMgr.autoSave(agent.getMessages());
 
-  /** 统一的 chat 包装：前缀 + 上下文统计 */
+  /** 统一的 chat 包装：前缀 + 上下文统计 + TaskTool 状态注入 */
   const agentChat = async (input: string) => {
+    // 暂停 readline，释放终端给流式输出
+    rl.pause();
+    updateTaskToolContext();
     process.stdout.write("\n" + chalk.green("🤖 Agent: "));
     const reply = await agent.chat(input);
     const usage = agent.getUsage();
@@ -183,8 +203,10 @@ async function main() {
     const fmt = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
     const pctStr = ctx.percent >= 80 ? chalk.yellow(`${ctx.percent}%`) : chalk.dim(`${ctx.percent}%`);
     process.stdout.write(
-      `\n${chalk.dim(`📊 上下文 ${fmt(ctx.current)}/${fmt(ctx.limit)} (${pctStr}${chalk.dim(")")}  |  ⚡ 累计 输入${fmt(usage.prompt)} 输出${fmt(usage.completion)}`)}\n\n`,
+      `\n${chalk.dim(`📊 上下文 ${fmt(ctx.current)}/${fmt(ctx.limit)} (${pctStr}${chalk.dim(")")}  |  ⚡ 累计 输入${fmt(usage.prompt)} 输出${fmt(usage.completion)}`)}\n`,
     );
+    process.stdout.write(chalk.green.bold("✅ 完成\n\n"));
+    rl.resume();
     return reply;
   };
 
@@ -327,11 +349,20 @@ async function main() {
             planMgr.approve();
             console.log(chalk.green("\n⚡ 开始执行计划...\n"));
 
-            // 6. 逐步执行
-            const completed = await planMgr.executeSteps(
-              { chat: agentChat },
-              () => console.log(planMgr.render()),
-            );
+            // 6. 执行（支持串行/并行两种模式）
+            let completed: boolean;
+            if (Config.planParallel) {
+              console.log(chalk.cyan("⚡ 并行模式：无依赖步骤将并发执行\n"));
+              completed = await planMgr.executeStepsParallel(
+                { chat: agentChat },
+                () => console.log(planMgr.render()),
+              );
+            } else {
+              completed = await planMgr.executeSteps(
+                { chat: agentChat },
+                () => console.log(planMgr.render()),
+              );
+            }
 
             // 7. 收尾
             if (completed) {
