@@ -26,23 +26,10 @@
 - [x] **工具结果预算管理**：middle truncation + Microcompact
 - [x] **Plan 模式**：探索 → 步骤拆解 → 确认 → 执行，dependsOn 依赖分析 + 并行执行
 - [x] **search_content 提速**：优先 ripgrep，fallback 纯 JS
-- [x] **子 Agent 委托 (Tool-as-Agent)**：task 工具封装子 Agent，LLM 自主 spawn，独立 messages + 工具集，3 个内置 Agent（general-purpose/explore/plan），继承/独立两条路径，并行执行，危险命令拦截，结果结构化回传
+- [x] **子 Agent 委托 (Tool-as-Agent)**：task 工具封装子 Agent，LLM 自主 spawn，独立 messages + 工具集，3 个内置 Agent，继承/独立两条路径，并行执行，危险命令拦截，结果结构化回传
 - [x] **全局 CLI**：`mini-agent` 命令，`pnpm link --global` 安装，`--workspace` / `--model` 参数，自动加载 .env，REPL + 单次执行
 - [x] **终端优化**：readline pause/resume、resize 处理、子 Agent 静默、完成标记
-
----
-
-## 计划
-
-> 按学习价值 + 依赖关系排列。
-
-### Skill 系统
-*无强制依赖（框架级）*
-
-- `.mini-agent/skills/` 下 skill 包，SKILL.md 格式（YAML frontmatter + Markdown body）
-- 启动加载注册，渐进式披露（启动时只加载 metadata，匹配后加载完整 body）
-- LLM 通过 description 语义自动匹配 + 用户手动 `/skill <name>` 调用
-- `/skill list` `/skill reload` 命令
+- [x] **Skill 系统**：SKILL.md 格式（YAML frontmatter + Markdown body），扫描 `.mini-agent/skills/` 加载，渐进式披露（启动时只加载 metadata，匹配后加载完整 body），支持可执行脚本
 
 ### MCP 协议
 *无强制依赖（框架级）*

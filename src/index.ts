@@ -14,6 +14,7 @@
  * └──────────────────────────────────────────────────┘
  */
 import * as readline from "node:readline";
+import * as path from "node:path";
 import chalk from "chalk";
 import { Config } from "./config.js";
 import { Agent } from "./core.js";
@@ -23,6 +24,8 @@ import { SessionManager } from "./session.js";
 import { PlanManager } from "./plan.js";
 import { checkDanger } from "./tools/shell-tools.js";
 import { taskToolState } from "./tools/task-tool.js";
+import { skillToolState } from "./tools/skill-tool.js";
+import { SkillManager } from "./skill/index.js";
 
 const BANNER = (logPath: string, sessionInfo: string, contextInfo?: string) => `
 ${chalk.cyan.bold("╔══════════════════════════════════════════╗")}
@@ -35,6 +38,7 @@ ${chalk.dim("命令:")}
   ${chalk.yellow("/plan")}      ${chalk.dim("- 计划模式（分解→确认→执行）")}
   ${chalk.yellow("/reset")}     ${chalk.dim("- 重置对话")}
   ${chalk.yellow("/session")}   ${chalk.dim("- 会话管理 (list/load/new/delete)")}
+  ${chalk.yellow("/skill")}     ${chalk.dim("- Skill 系统 (list/<name>/reload)")}
   ${chalk.yellow("/exit")}      ${chalk.dim("- 退出")}
 
 ${chalk.dim("📝 日志:")} ${logPath}
@@ -55,6 +59,11 @@ ${chalk.bold("计划模式:")}
   ${chalk.yellow("/plan <描述>")}  ${chalk.dim("- 创建新计划（LLM 分析→确认→执行）")}
   ${chalk.yellow("/plan show")}    ${chalk.dim("- 查看当前计划进度")}
   ${chalk.yellow("/plan cancel")}  ${chalk.dim("- 取消当前计划")}
+
+${chalk.bold("Skill 系统:")}
+  ${chalk.yellow("/skill list")}     ${chalk.dim("- 列出已加载的 skill")}
+  ${chalk.yellow("/skill <name>")}   ${chalk.dim("- 激活指定 skill")}
+  ${chalk.yellow("/skill reload")}   ${chalk.dim("- 热重载 skill")}
 
 ${chalk.bold("可用功能:")}
   ${chalk.green("对话交流")}  - 直接输入，AI 会回复
@@ -170,12 +179,31 @@ async function main() {
   sessionMgr.startNew(); // 默认新会话
   let sessionInfo = `新会话 (${sessionMgr.getDir()})`;
 
+  // Skill 系统
+  const skillMgr = new SkillManager(
+    path.join(Config.workspaceRoot, Config.skillsDir),
+    logger,
+  );
+  skillMgr.load();
+  skillToolState.manager = skillMgr;
+
   const agent = new Agent(logger, (token: string) => {
     process.stdout.write(token);
   }, context ?? undefined, askConfirm);
 
   // 初始化 TaskTool 共享状态（注入父 Agent 上下文供给）
   taskToolState.logger = logger;
+
+  // 将 Skill 概览注入 System Prompt
+  if (!skillMgr.isEmpty) {
+    const msgs = agent.getMessages();
+    if (msgs.length > 0 && typeof msgs[0].content === "string") {
+      msgs[0] = {
+        ...msgs[0],
+        content: msgs[0].content + skillMgr.formatOverview(),
+      };
+    }
+  }
 
   const updateTaskToolContext = () => {
     taskToolState.parentContext = {
@@ -187,6 +215,11 @@ async function main() {
   const planMgr = new PlanManager();
 
   console.log(BANNER(logger.getFilePath(), sessionInfo, contextSummary));
+
+  // 显示 Skill 加载状态
+  if (!skillMgr.isEmpty) {
+    console.log(chalk.dim(`🧩 Skill: ${skillMgr.count} 个已加载（/skill list 查看）\n`));
+  }
 
   // 自动保存（每轮后）
   const autoSave = () => sessionMgr.autoSave(agent.getMessages());
@@ -283,6 +316,44 @@ async function main() {
             }
           } else {
             console.log(chalk.dim("  用法: /session [list|new|load <N>|delete <N>]\n"));
+          }
+          continue;
+        }
+
+        case "/skill": {
+          const subCmd = parts[1];
+          if (!subCmd || subCmd === "list") {
+            if (skillMgr.isEmpty) {
+              console.log(chalk.dim("  暂无已加载的 Skill。在 .mini-agent/skills/ 下创建 skill.md 来添加。\n"));
+            } else {
+              console.log(chalk.bold(`\n  已加载的 Skill (${skillMgr.count}):\n`));
+              for (const s of skillMgr.getAll()) {
+                console.log(`  ${chalk.yellow(s.name)}  ${chalk.dim(`— ${s.description}`)}`);
+              }
+              console.log(chalk.dim(`\n  使用 /skill <name> 激活指定 Skill\n`));
+            }
+            continue;
+          }
+          if (subCmd === "reload") {
+            skillMgr.reload();
+            console.log(chalk.yellow(`🔄 Skill 已重载 (${skillMgr.count} 个)\n`));
+            continue;
+          }
+          // /skill <name> — 激活并注入到对话
+          const skill = skillMgr.activate(subCmd);
+          if (!skill) {
+            console.log(chalk.red(`  未找到 Skill: ${subCmd}\n`));
+            continue;
+          }
+          const skillPrompt = `请按以下 Skill 指令执行:\n\n## ${skill.name}\n${skill.description}\n\n${skill.body}`;
+          console.log(chalk.green(`\n🧩 已激活 Skill: ${skill.name}\n`));
+          console.log(chalk.dim(`${skill.body.slice(0, 120)}...\n`));
+          // 将 skill 指令作为当前轮输入发给 Agent
+          try {
+            await agentChat(skillPrompt);
+            autoSave();
+          } catch (e: any) {
+            console.error(chalk.red(`\n❌ Skill 执行异常: ${e.message}\n`));
           }
           continue;
         }

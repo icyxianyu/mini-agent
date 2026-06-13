@@ -31,6 +31,9 @@ import { FetchUrlTool } from "./web-tools.js";
 // 子 Agent 委托工具
 import { TaskTool } from "./task-tool.js";
 
+// Skill 激活工具
+import { SkillTool } from "./skill-tool.js";
+
 /** 所有可用工具实例 */
 export const allTools: BaseTool[] = [
   // 文件操作
@@ -50,6 +53,8 @@ export const allTools: BaseTool[] = [
   new FetchUrlTool(),
   // 子 Agent 委托
   new TaskTool(),
+  // Skill 激活
+  new SkillTool(),
 ];
 
 /** 根据名称查找工具 */

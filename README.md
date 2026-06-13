@@ -2,7 +2,7 @@
 
 > 简易版 Claude Code — 一个用于学习 **AI Agent 架构** 的 TypeScript 项目。
 
-核心能力：**对话**、**文件操作**、**终端命令**、**内容搜索**、**子 Agent 委托**。12 个工具 + 流式输出 + 日志 + 全局 CLI。
+核心能力：**对话**、**文件操作**、**终端命令**、**内容搜索**、**子 Agent 委托**、**Skill 系统**。13 个工具 + 流式输出 + 日志 + 全局 CLI。
 
 📋 [开发计划 TODO](TODO.md) · 📝 [问题记录 RECORD](RECORD.md)
 
@@ -62,11 +62,17 @@ agent/
 │   │   ├── search-tools.ts   # ripgrep/纯 JS 搜索
 │   │   ├── web-tools.ts      # HTTP GET 抓取
 │   │   ├── task-tool.ts      # ★ 子 Agent 委托工具
-│   │   └── index.ts          # 工具注册表 (12 个工具)
-│   └── agents/
-│       ├── types.ts          # SubAgentConfig / SubAgentResult
-│       ├── builtin.ts        # 3 个内置 Agent 定义
-│       ├── runner.ts         # SubAgentRunner 运行时引擎
+│   │   ├── skill-tool.ts     # ★ Skill 激活工具
+│   │   └── index.ts          # 工具注册表 (13 个工具)
+│   ├── agents/
+│   │   ├── types.ts          # SubAgentConfig / SubAgentResult
+│   │   ├── builtin.ts        # 3 个内置 Agent 定义
+│   │   ├── runner.ts         # SubAgentRunner 运行时引擎
+│   │   └── index.ts          # 模块导出
+│   └── skill/
+│       ├── types.ts          # SkillMeta / SkillDefinition
+│       ├── loader.ts         # 扫描 + YAML frontmatter 解析
+│       ├── manager.ts        # 注册/查询/匹配/注入
 │       └── index.ts          # 模块导出
 ├── bin/
 │   └── mini-agent.ts         # 全局 CLI 入口
@@ -94,7 +100,7 @@ agent/
 │        提供 Agent.forked() 创建独立子 Agent               │
 ├──────────────────────┬──────────────────────────────────┤
 │   LLM 客户端 (llm.ts) │       工具层 (tools/)            │
-│   流式/非流式 API     │   12 个工具，含 task 子 Agent     │
+│   流式/非流式 API     │   13 个工具，含 task 子 Agent     │
 ├──────────────────────┴──────────────────────────────────┤
 │                   配置层 (config.ts)                      │
 │                     .env → 全局配置                       │
@@ -139,6 +145,35 @@ agent/
 
 **安全**：禁止嵌套 task（防无限递归）；子 Agent 内的 sudo/rm -rf 等危险命令自动拦截。
 
+### Skill 系统
+
+**SKILL.md 格式** — YAML frontmatter + Markdown body：
+
+```markdown
+---
+name: 技能名称
+description: 触发条件描述，LLM 用于语义匹配
+---
+
+# 技能指令正文...
+```
+
+**渐进式披露**：启动时只加载 `name + description` 注入 System Prompt（~100 tokens/skill），LLM 匹配后通过 `skill` 工具激活，完整 body 按需加载。
+
+**三种使用方式**：
+- `/skill list` — 查看所有已加载 skill
+- `/skill <name>` — 手动激活
+- LLM 自动匹配 — 当用户需求命中 skill 的 `description` 时，LLM 通过 `skill` 工具自主激活
+
+**支持可执行脚本**：skill 目录下 `scripts/` 放可执行脚本，skill 指令中引用执行。
+
+```
+.mini-agent/skills/<name>/
+├── SKILL.md
+└── scripts/
+    └── setup.sh
+```
+
 ---
 
 ## 可用工具列表
@@ -157,6 +192,7 @@ agent/
 | `execute_command` | 执行 | 终端命令 |
 | `fetch_url` | 只读 | HTTP GET 获取网页 |
 | `task` | 委托 | ★ 启动子 Agent |
+| `skill` | 委托 | ★ 激活 Skill 获取指令 |
 
 ---
 

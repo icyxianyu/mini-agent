@@ -34,6 +34,7 @@ export const Config = {
       "4. 每个工具的使用方式请参考工具自身的 description，工具描述中已包含最佳实践。",
       "5. workspace 内所有文件操作安全，越界会被拒绝。写/删文件需用户确认。",
       "6. 🔧 子Agent委托：遇到复杂、多步骤的独立任务时，使用 task 工具启动子Agent。子Agent拥有独立上下文，适合代码探索、大规模重构等场景。多个独立子任务可并行调用多个 task。",
+      "7. 🧩 Skill 激活：当用户需求匹配某个 Skill 的描述时，务必先用 skill 工具激活获取完整指令再执行，不要凭记忆猜测 Skill 的内容。",
     ].join("\n"),
 
   /** 工作区根目录，所有文件操作限制在此目录内 */
@@ -64,6 +65,9 @@ export const Config = {
 
   /** 工具结果硬截断：最大字节数（超出做 middle truncation） */
   toolResultMaxBytes: Number(process.env.TOOL_RESULT_MAX_BYTES) || 10240, // 10 KiB
+
+  /** Skill 目录路径（相对于 workspaceRoot） */
+  skillsDir: process.env.SKILLS_DIR || ".mini-agent/skills",
 
   /** 子 Agent 最大工具调用轮数（默认 8） */
   subAgentMaxRounds: Number(process.env.SUB_AGENT_MAX_ROUNDS) || 8,
