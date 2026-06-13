@@ -36,20 +36,13 @@
 
 > 按学习价值 + 依赖关系排列。
 
-### 动态工具挂载
-*无强制依赖*
-
-- 根据对话阶段/复杂度动态决定给 LLM 暴露哪些工具
-- 简单对话: 不挂工具（节省 token）
-- 代码阅读: 只挂 read_file / list_directory / search_content / fetch_url
-- 代码修改: 追加 write_file / edit_file / create_directory / execute_command
-- 复杂任务: 追加 task（子 Agent 委托能力）
-
 ### Skill 系统
 *无强制依赖（框架级）*
 
-- `.mini-agent/skills/` 下 skill 包定义工具 + prompt + 触发条件
-- 启动加载注册，`/skill list` `/skill reload`
+- `.mini-agent/skills/` 下 skill 包，SKILL.md 格式（YAML frontmatter + Markdown body）
+- 启动加载注册，渐进式披露（启动时只加载 metadata，匹配后加载完整 body）
+- LLM 通过 description 语义自动匹配 + 用户手动 `/skill <name>` 调用
+- `/skill list` `/skill reload` 命令
 
 ### MCP 协议
 *无强制依赖（框架级）*
@@ -92,3 +85,13 @@
 
 - React + TypeScript，四面板：对话 | 文件树 | 终端 | 日志
 - WebSocket/SSE 通信，终端和 Web 共用 Agent 核心
+
+---
+
+## 优化
+*工具量上去后再做，现阶段收益不大*
+
+- **动态工具挂载**：根据对话阶段动态决定暴露哪些工具（简单对话不挂、代码阅读只挂只读、复杂任务挂全部），等 MCP/Skill 把工具数推到 30+ 才有价值
+- **Skill 条件激活**：`paths` 字段按操作文件路径匹配激活 skill，skill 数量 20+ 时减少选择噪声
+- **Skill Fork 模式**：不必要——现有 task 工具已能子 Agent 隔离执行
+- **终端输出重构**：REPL + 流式 + 工具进度三者争 stdout 是架构固有限制，Web UI 做完后彻底消失
